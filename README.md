@@ -1,8 +1,20 @@
 Code used in relation to the project presented in the preprint "Deep learning-based polygenic scores enhance generalizability of psychiatric disorders prediction, Cobuccio L. et al. 2025."
 
+
+## 0_Set up
+
+Softwares and versions used
+
+* EIR version 0.1.39 https://eir.readthedocs.io/en/stable/
+* Snakemake 7.18.2
+
+Encode genotype data into numpy array with plink_pipelines https://github.com/arnor-sigurdsson/plink_pipelines
+
 ## 01_GLN
 
-In fodler 01_gln
+Run DL model architecture Genome-Local-Net (GLN) on genotype data
+
+In folder 01_gln
 
 ```
 
