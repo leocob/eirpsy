@@ -1,6 +1,6 @@
 Code used in relation to the project presented in the preprint "Deep learning-based polygenic scores enhance generalizability of psychiatric disorders prediction, Cobuccio L. et al. 2025."
 
-## GLN
+## 01_GLN
 
 In fodler 01_gln
 
@@ -10,7 +10,7 @@ snakemake --snakefile eir_pipeline.smk --configfilegln_config.yaml --latency-wai
 --cluster "sbatch -A igpv -t {resources.time} -p {resources.partition} --mem={resources.mem} --cpus-per-task {resources.threads} ${gres}" --jobs 50
 ```
 
-# Bigstatsr
+# 02_Bigstatsr
 
 Train bigstatsr on training of iPSYCH1 and predict on test iPSYCH1
 
@@ -31,11 +31,12 @@ snakemake --snakefile bigstatsr_pipeline_iPSYCH2.smk --configfile config_bigstat
 
 ```
 
-## Logistic regression integration
+## 03_Logistic regression integration
 
 Follow code in 03_logistic_integration/logistic_integration.qmd
 
-## DL integration with EIR
+
+## 04_DL integration with EIR
 
 In folder 04_DL_integration
 
@@ -45,6 +46,6 @@ snakemake --config gpu_or_cpu=$gpu_or_cpu --snakefile eir_pipeline_DL_integratio
 --cluster "sbatch -A igpv -t {resources.time} -p {resources.partition} --mem={resources.mem} --cpus-per-task {resources.threads} ${gres}"
 ```
 
-## Plotting
+## 05_Plotting
 
 Follow code in 05_plotting/plotting.qmd
