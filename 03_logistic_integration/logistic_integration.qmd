@@ -1,0 +1,1218 @@
+---
+title: "logistic_integration.qmd"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+# To run to test locally
+```{r}
+library(tidyverse)
+library(tidymodels)
+set.seed(123)  # for reproducibility
+
+
+extract_coef_wflow_set <- function(wfklow_set_tibble, predictions = FALSE){
+    # Function to extract the coefficients from a workflow_set. These are the coefficients of the model after TRAINING/FITTING
+    if(predictions == TRUE){
+      result  <- wfklow_set_tibble %>% 
+        unnest(result) %>% 
+        unnest(.extracts) %>% 
+        # select(.extracts) %>% 
+        unnest(.extracts) %>% 
+        filter(map_lgl(.extracts, ~ is_tibble(.x))) %>% 
+        # select(.extracts)
+        unnest(.extracts) %>% 
+        select(wflow_id, id, term:.predictions) %>% 
+        rename(Model = wflow_id,
+        Fold = id)
+    } else {
+      result  <- wfklow_set_tibble %>% 
+        unnest(result) %>% 
+        unnest(.extracts) %>% 
+        # select(.extracts) %>% 
+        unnest(.extracts) %>% 
+        filter(map_lgl(.extracts, ~ is_tibble(.x))) %>% 
+        # select(.extracts)
+        unnest(.extracts) %>% 
+        select(wflow_id, id, term:p.value) %>% 
+        rename(Model = wflow_id,
+        Fold = id)
+    }
+    return(result)
+}
+
+```
+
+
+# Gather data iPSYCH2012
+Code to gather the validation scores from GLN and bigstatsr
+```{r}
+
+#-
+library(glue)
+library(tidyverse)
+library(tidymodels)
+
+dict_small_to_cap <- c("adhd" = "ADHD",
+                "autism" = "ASD",
+                "bipol" = "BIP",
+                "majordd" = "MDD",
+                "skizo" = "SCZ")
+# The PGS and FGRS are already in the metadata/diagnosis/genotypes
+# /faststorage/jail/project/igpv/backup/metadata/, diagnosis, "genotypes", "csv", f"train_valid_{diagnosis}_nodiagkontrol2015I_{cohort}_pgss_fgrss_bigstatsr.csv"
+
+cohort  <- "iPSYCH2012_EurUnrel"
+
+
+
+# setwd("logreg folder")
+# BIGSTATSR ----------------------------------------------------------------
+
+mapping_function <- function(file_path) {
+
+  # file_path  <- files[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  df  <- read_csv(file_path) %>% 
+  mutate(Diagnosis = DIAGNOSIS) %>%
+  rename(True_Label = truth) %>% 
+  rename(Score_1 = one_minus_pred) %>% 
+  rename(Predicted_class = predicted) %>% 
+  mutate(Model = "bigstatsr") %>% 
+  select(ID, True_Label, Score_1, Model, Diagnosis, Predicted_class, -diag, -row_index)
+  # rename(!!glue("{DIAGNOSIS}_prob_bigstatsr") := pred)
+
+}
+
+bigstatsr_folder  <- "../2023-12-06-Bigstatsr_psy_diag_New_Informed_iPSYCH2012_iPSYCH2015i"
+
+files  <- list.files(bigstatsr_folder, pattern = "train.*onlygen.csv", full.names = TRUE, recursive = TRUE)
+# readRDS all files and row bind them as tibble
+train_bigstatsr  <- map(files, mapping_function) %>% reduce(bind_rows)
+
+files  <- list.files(bigstatsr_folder, pattern = "test.*onlygen.csv", full.names = TRUE, recursive = TRUE)
+# readRDS all files and row bind them as tibble
+test_bigstatsr  <- map(files, mapping_function) %>% reduce(bind_rows)
+
+saveRDS(train_bigstatsr, glue("train_bigstatsr_{cohort}.rds"))
+saveRDS(test_bigstatsr, glue("test_bigstatsr_{cohort}.rds"))
+
+# GLN ----------------------------------------------------------------
+mapping_function <- function(file_path) {
+
+  # file_path  <- files[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  # extract everything between "model_" and "_perf-average"
+  iter_max  <- str_extract(file_path, "(?<=model_)(.*)(?=_perf-average)")
+
+  # remove everything from saved_models onwards from file_path
+  newfilepath  <- str_remove(file_path, "saved_models.*")
+  
+  results_path  <- file.path(newfilepath, "results")
+
+  dirs  <- list.dirs(path = results_path, full.names = TRUE, recursive = TRUE)
+
+  preds_filepath <- str_detect(dirs, iter_max) %>% which() %>% dirs[.]
+
+  df  <- read_csv(glue("{preds_filepath}/predictions.csv")) %>% 
+  mutate(Diagnosis = DIAGNOSIS) %>%
+  rename(Predicted_class = Predicted) %>% 
+  rename(Score_0 = "Score Class 0.0", Score_1 = "Score Class 1.0")  %>% 
+  mutate(Model = "GLN") %>% 
+  select(ID, True_Label, Score_1, Model, Diagnosis, Predicted_class, Score_0)
+
+}
+
+gln_folder  <- "../2023-12-04-EIR_GLN-best_5CV_all_Informed_genotypes_iPSYCH2012"
+
+files  <- list.files(gln_folder, pattern = "*.pt", full.names = TRUE, recursive = TRUE)
+# remove files matching "hypercomb_17" and "hypercomb_30"
+files  <- files[!str_detect(files, "hypercomb_17|hypercomb_30")]
+# readRDS all files and row bind them as tibble
+train_GLN  <- map(files, mapping_function) %>% reduce(bind_rows)
+
+# They match
+# train_bigstatsr %>% distinct(ID) %>% nrow()
+# train_GLN %>% distinct(ID) %>% nrow()
+
+# train_GLN %>% count(Diagnosis)
+# train_bigstatsr %>% count(Diagnosis)
+
+# files  <- list.files(gln_folder, pattern = "test_.*/predictions.csv", full.names = TRUE, recursive = TRUE)
+# dirs  <- list.dirs(gln_folder, full.names = TRUE, recursive = FALSE)
+# # keep only the ones matching "test_"
+# dirs  <- dirs[str_detect(dirs, "test_")]
+
+mapping_function <- function(file_path) {
+
+  # file_path  <- files[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  # # extract everything between "model_" and "_perf-average"
+  # iter_max  <- str_extract(file_path, "(?<=model_)(.*)(?=_perf-average)")
+
+  # # remove everything from saved_models onwards from file_path
+  # newfilepath  <- str_remove(file_path, "saved_models.*")
+  
+  # results_path  <- file.path(newfilepath, "results")
+
+  # dirs  <- list.dirs(path = results_path, full.names = TRUE, recursive = TRUE)
+
+  # preds_filepath <- str_detect(dirs, iter_max) %>% which() %>% dirs[.]
+
+  df  <- read_csv(file_path) %>% 
+  mutate(Diagnosis = DIAGNOSIS) %>%
+  rename(Score_0 = "0.0", Score_1 = "1.0")  %>% 
+  rename(True_Label = "True Label") %>% 
+  rename(True_Label_Untransformed = "True Label Untransformed") %>%
+  mutate(Model = "GLN") %>% 
+  select(ID, True_Label, Score_1, Model, Diagnosis, Score_0, -True_Label_Untransformed)
+
+}
+
+
+# predictions_files <- dir(gln_folder, pattern = "predictions.csv", recursive = TRUE, full.names = TRUE)[grepl("/test_", dir(gln_folder, pattern = "predictions.csv", recursive = TRUE, full.names = TRUE))]
+
+# remove files matching "low_perf"
+# predictions_files  <- predictions_files[!str_detect(predictions_files, "low_perf")]
+
+# readRDS all files and row bind them as tibble
+test_GLN  <- map(predictions_files, mapping_function) %>% reduce(bind_rows) %>% 
+group_by(Diagnosis, ID, True_Label, Model) %>% 
+reframe(Score_1 = mean(Score_1), Score_0 = mean(Score_0)) %>% 
+select(ID, True_Label, Score_1, Model, Diagnosis, Score_0)
+
+
+saveRDS(train_GLN, glue("train_GLN_{cohort}.rds"))
+saveRDS(test_GLN, glue("test_GLN_{cohort}.rds"))
+
+####################################################################################
+# PGSs and FGRSs ----------------------------------------------------------------
+####################################################################################
+
+metadata  <- "/faststorage/jail/project/igpv/backup/metadata"
+metadata_folder  <- glue("{metadata}/{cohort}")
+
+dirs <- list.dirs(metadata_folder, full.names = TRUE, recursive = FALSE)
+diagnoses  <- c("adhd", "autism", "bipol", "majordd", "skizo")
+# keep only the ones in diagnoses
+pattern <- paste0("(", paste(diagnoses, collapse = "|"), ")(/|$)")
+
+# Filtering directories based on the pattern
+dirs <- dirs[str_detect(dirs, pattern)]
+# keep only those NOT having anything after the specific diagnosis
+files_list <- unlist(lapply(dirs, function(dir) {
+  list.files(dir, pattern = "train_valid.*pgss_fgrss_bigstatsr.csv", full.names = TRUE, recursive = TRUE)
+}))
+
+mapping_function <- function(file_path) {
+
+  # file_path  <- files_list[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  # # extract everything between "model_" and "_perf-average"
+  # iter_max  <- str_extract(file_path, "(?<=model_)(.*)(?=_perf-average)")
+
+  # # remove everything from saved_models onwards from file_path
+  # newfilepath  <- str_remove(file_path, "saved_models.*")
+  
+  # results_path  <- file.path(newfilepath, "results")
+
+  # dirs  <- list.dirs(path = results_path, full.names = TRUE, recursive = TRUE)
+
+  # preds_filepath <- str_detect(dirs, iter_max) %>% which() %>% dirs[.]
+
+  df  <- read_csv(file_path) %>% 
+  select(ID, sex, PC1:PC10, contains("PGS"), contains("FH"), contains("FGRS"), contains("bigstatsr"), contains("nodiagkontrol2015I")) %>% 
+  mutate(Diagnosis = DIAGNOSIS)
+  # rename(Score_0 = "0.0", Score_1 = "1.0")  %>% 
+  # rename(True_Label = "True Label") %>% 
+  # rename(True_Label_Untransformed = "True Label Untransformed") %>%
+  # mutate(Model = "GLN") %>% 
+  # select(ID, True_Label, Score_1, Model, Diagnosis, Score_0, -True_Label_Untransformed)
+
+}
+
+train_pgss_fgrss_bigstatsr  <- map(files_list, mapping_function) %>% reduce(bind_rows)
+
+
+files_list <- unlist(lapply(dirs, function(dir) {
+  list.files(dir, pattern = "test.*pgss_fgrss_bigstatsr.csv", full.names = TRUE, recursive = TRUE)
+}))
+
+test_pgss_fgrss_bigstatsr  <- map(files_list, mapping_function) %>% reduce(bind_rows)
+
+saveRDS(train_pgss_fgrss_bigstatsr, glue("train_pgss_fgrss_bigstatsr_{cohort}.rds"))
+saveRDS(test_pgss_fgrss_bigstatsr, glue("test_pgss_fgrss_bigstatsr_{cohort}.rds"))
+
+
+
+
+
+train_GLN  <- readRDS(glue("train_GLN_{cohort}.rds"))
+test_GLN  <- readRDS(glue("test_GLN_{cohort}.rds"))
+
+
+train_bigstatsr  <- train_bigstatsr %>% pivot_wider(names_from = Model, values_from = Score_1, names_prefix = "Score1_")
+test_bigstatsr  <- test_bigstatsr %>% pivot_wider(names_from = Model, values_from = Score_1, names_prefix = "Score1_")
+
+train_GLN  <- train_GLN %>% pivot_wider(names_from = Model, values_from = Score_1, names_prefix = "Score1_")
+test_GLN  <- test_GLN %>% pivot_wider(names_from = Model, values_from = Score_1, names_prefix = "Score1_")
+
+# Combine all data
+train_all  <- left_join(train_bigstatsr, train_GLN, by = c("ID", "Diagnosis", "True_Label")) %>% 
+left_join(train_pgss_fgrss_bigstatsr, by = c("ID", "Diagnosis")) %>% 
+mutate(Split = "train_valid")
+
+test_all  <- left_join(test_bigstatsr, test_GLN, by = c("ID", "Diagnosis")) %>%
+left_join(test_pgss_fgrss_bigstatsr, by = c("ID", "Diagnosis")) %>%
+mutate(Split = "test")
+
+saveRDS(train_all, glue("train_all_{cohort}.rds"))
+saveRDS(test_all, glue("test_all_{cohort}.rds"))
+
+all  <- bind_rows(train_all, test_all)
+saveRDS(all, glue("all_{cohort}.rds"))
+
+
+
+
+
+
+```
+
+# Gather data iPSYCH2015i
+
+Code to gather the validation scores from GLN and bigstatsr
+```{r}
+
+#-
+library(glue)
+library(tidyverse)
+library(tidymodels)
+
+dict_small_to_cap <- c("adhd" = "ADHD",
+                "autism" = "ASD",
+                "bipol" = "BIP",
+                "majordd" = "MDD",
+                "skizo" = "SCZ")
+# The PGS and FGRS are already in the metadata/diagnosis/genotypes
+# /faststorage/jail/project/igpv/backup/metadata/, diagnosis, "genotypes", "csv", f"train_valid_{diagnosis}_nodiagkontrol2015I_{cohort}_pgss_fgrss_bigstatsr.csv"
+
+cohort  <- "iPSYCH2015i_EurUnrel"
+cohort_short  <- str_replace(cohort, "_EurUnrel", "")
+cohort_number  <- str_extract(cohort_short, "[0-9]+i")
+
+
+
+# setwd("logreg folder")
+#############################################################################
+# BIGSTATSR ----------------------------------------------------------------
+#############################################################################
+
+mapping_function <- function(file_path) {
+
+  # file_path  <- files[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  df  <- read_csv(file_path) %>% 
+  mutate(Diagnosis = DIAGNOSIS) %>%
+  rename(True_Label = truth) %>% 
+  rename(Score_1 = one_minus_pred) %>% 
+  rename(Predicted_class = predicted) %>% 
+  mutate(Model = "bigstatsr") %>% 
+  select(ID, True_Label, Score_1, Model, Diagnosis, Predicted_class, -diag, -row_index)
+  # rename(!!glue("{DIAGNOSIS}_prob_bigstatsr") := pred)
+
+}
+
+
+bigstatsr_folder  <- glue("../2023-12-06-Bigstatsr_psy_diag_New_Informed_iPSYCH2012_iPSYCH2015i/{cohort_number}")
+
+files  <- list.files(bigstatsr_folder, pattern = "test.*onlygen.csv", full.names = TRUE, recursive = TRUE)
+# readRDS all files and row bind them as tibble
+preds_bigstatsr_15i  <- map(files, mapping_function) %>% reduce(bind_rows)
+
+
+preds_bigstatsr_15i %>% count(Diagnosis)
+saveRDS(preds_bigstatsr_15i, glue("preds_bigstatsr_{cohort}.rds"))
+#############################################################################
+# GLN ----------------------------------------------------------------
+#############################################################################
+mapping_function <- function(file_path) {
+
+  # file_path  <- files[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  # extract everything between "model_" and "_perf-average"
+  iter_max  <- str_extract(file_path, "(?<=model_)(.*)(?=_perf-average)")
+
+  # remove everything from saved_models onwards from file_path
+  newfilepath  <- str_remove(file_path, "saved_models.*")
+  
+  results_path  <- file.path(newfilepath, "results")
+
+  dirs  <- list.dirs(path = results_path, full.names = TRUE, recursive = TRUE)
+
+  preds_filepath <- str_detect(dirs, iter_max) %>% which() %>% dirs[.]
+
+  df  <- read_csv(glue("{preds_filepath}/predictions.csv")) %>% 
+  mutate(Diagnosis = DIAGNOSIS) %>%
+  rename(Predicted_class = Predicted) %>% 
+  rename(Score_0 = "Score Class 0.0", Score_1 = "Score Class 1.0")  %>% 
+  mutate(Model = "GLN") %>% 
+  select(ID, True_Label, Score_1, Model, Diagnosis, Predicted_class, Score_0)
+
+}
+
+gln_folder  <- "../2023-12-04-EIR_GLN-best_5CV_all_Informed_genotypes_iPSYCH2012"
+
+
+files  <- list.files(gln_folder, pattern = "predictions.csv", full.names = TRUE, recursive = TRUE)
+
+predictions_files  <- files[str_detect(files, "iPSYCH2015i")]
+
+
+# They match
+# train_bigstatsr %>% distinct(ID) %>% nrow()
+# train_GLN %>% distinct(ID) %>% nrow()
+
+# train_GLN %>% count(Diagnosis)
+# train_bigstatsr %>% count(Diagnosis)
+
+# files  <- list.files(gln_folder, pattern = "test_.*/predictions.csv", full.names = TRUE, recursive = TRUE)
+# dirs  <- list.dirs(gln_folder, full.names = TRUE, recursive = FALSE)
+# # keep only the ones matching "test_"
+# dirs  <- dirs[str_detect(dirs, "test_")]
+
+mapping_function <- function(file_path) {
+
+  # file_path  <- files[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  # # extract everything between "model_" and "_perf-average"
+  # iter_max  <- str_extract(file_path, "(?<=model_)(.*)(?=_perf-average)")
+
+  # # remove everything from saved_models onwards from file_path
+  # newfilepath  <- str_remove(file_path, "saved_models.*")
+  
+  # results_path  <- file.path(newfilepath, "results")
+
+  # dirs  <- list.dirs(path = results_path, full.names = TRUE, recursive = TRUE)
+
+  # preds_filepath <- str_detect(dirs, iter_max) %>% which() %>% dirs[.]
+
+  df  <- read_csv(file_path) %>% 
+  mutate(Diagnosis = DIAGNOSIS) %>%
+  rename(Score_0 = "0.0", Score_1 = "1.0")  %>% 
+  rename(True_Label = "True Label") %>% 
+  rename(True_Label_Untransformed = "True Label Untransformed") %>%
+  mutate(Model = "GLN") %>% 
+  select(ID, True_Label, Score_1, Model, Diagnosis, Score_0, -True_Label_Untransformed)
+
+}
+
+
+# predictions_files <- dir(gln_folder, pattern = "predictions.csv", recursive = TRUE, full.names = TRUE)[grepl("/test_", dir(gln_folder, pattern = "predictions.csv", recursive = TRUE, full.names = TRUE))]
+
+# remove files matching "low_perf"
+# predictions_files  <- predictions_files[!str_detect(predictions_files, "low_perf")]
+
+# readRDS all files and row bind them as tibble
+GLN_15i  <- map_dfr(predictions_files, mapping_function) %>%
+group_by(Diagnosis, ID, True_Label, Model) %>% 
+reframe(Score_1 = mean(Score_1), Score_0 = mean(Score_0)) %>% 
+select(ID, True_Label, Score_1, Model, Diagnosis, Score_0)
+
+
+saveRDS(GLN_15i, glue("preds_GLN_{cohort}.rds"))
+
+####################################################################################
+# PGSs and FGRSs ----------------------------------------------------------------
+####################################################################################
+
+metadata  <- "/faststorage/jail/project/igpv/backup/metadata"
+metadata_folder  <- glue("{metadata}/{cohort}")
+
+dirs <- list.dirs(metadata_folder, full.names = TRUE, recursive = FALSE)
+diagnoses  <- c("adhd", "autism", "bipol", "majordd", "skizo")
+# keep only the ones in diagnoses
+pattern <- paste0("(", paste(diagnoses, collapse = "|"), ")(/|$)")
+
+# Filtering directories based on the pattern
+dirs <- dirs[str_detect(dirs, pattern)]
+# keep only those NOT having anything after the specific diagnosis
+files_list <- unlist(lapply(dirs, function(dir) {
+  list.files(dir, pattern = "train_valid.*pgss_fgrss_bigstatsr.csv", full.names = TRUE, recursive = TRUE)
+}))
+
+mapping_function <- function(file_path) {
+
+  # file_path  <- files_list[1] 
+  diagnosis  <- str_extract(file_path, "adhd|autism|bipol|majordd|skizo")
+  DIAGNOSIS  <- dict_small_to_cap[[diagnosis]]
+
+  # # extract everything between "model_" and "_perf-average"
+  # iter_max  <- str_extract(file_path, "(?<=model_)(.*)(?=_perf-average)")
+
+  # # remove everything from saved_models onwards from file_path
+  # newfilepath  <- str_remove(file_path, "saved_models.*")
+  
+  # results_path  <- file.path(newfilepath, "results")
+
+  # dirs  <- list.dirs(path = results_path, full.names = TRUE, recursive = TRUE)
+
+  # preds_filepath <- str_detect(dirs, iter_max) %>% which() %>% dirs[.]
+
+  df  <- read_csv(file_path) %>% 
+  select(ID, sex, PC1:PC10, contains("PGS"), contains("FH"), contains("FGRS"), contains("bigstatsr"), contains("nodiagkontrol2015I")) %>% 
+  mutate(Diagnosis = DIAGNOSIS)
+  # rename(Score_0 = "0.0", Score_1 = "1.0")  %>% 
+  # rename(True_Label = "True Label") %>% 
+  # rename(True_Label_Untransformed = "True Label Untransformed") %>%
+  # mutate(Model = "GLN") %>% 
+  # select(ID, True_Label, Score_1, Model, Diagnosis, Score_0, -True_Label_Untransformed)
+
+}
+
+train_pgss_fgrss_bigstatsr  <- map_dfr(files_list, mapping_function)
+
+
+files_list <- unlist(lapply(dirs, function(dir) {
+  list.files(dir, pattern = "test.*pgss_fgrss_bigstatsr.csv", full.names = TRUE, recursive = TRUE)
+}))
+
+test_pgss_fgrss_bigstatsr  <- map(files_list, mapping_function) %>% reduce(bind_rows)
+
+train_test_pgss_fgrss  <- bind_rows(train_pgss_fgrss_bigstatsr, test_pgss_fgrss_bigstatsr)
+
+
+
+train_test_pgss_fgrss %>% count(Diagnosis)
+
+
+saveRDS(train_test_pgss_fgrss, glue("preds_pgss_fgrss_{cohort}.rds"))
+
+
+preds_folder  <- "iPSYCH2015i_preds"
+
+gln_15i  <- readRDS(file.path(preds_folder, glue("preds_GLN_{cohort}.rds"))) %>% 
+rename(Score1_GLN = Score_1)
+bigstatsr_15i  <- readRDS(file.path(preds_folder, glue("preds_bigstatsr_{cohort}.rds"))) %>% 
+select(-Predicted_class) %>% 
+rename(Score1_bigstatsr = Score_1)
+pgss_fgrss_15i  <- readRDS(file.path(preds_folder, glue("preds_pgss_fgrss_{cohort}.rds")))
+
+
+gln_15i  %>% count(Diagnosis)
+bigstatsr_15i  %>% count(Diagnosis)
+pgss_fgrss_15i  %>% count(Diagnosis)
+
+
+df15i <- left_join(pgss_fgrss_15i, gln_15i) %>%
+left_join(bigstatsr_15i, by = c("ID","Diagnosis", "True_Label"))
+
+
+
+####################################################################################
+# Checking NAs ----------------------------------------------------------------
+####################################################################################
+df15i %>% count(Diagnosis, Model)
+
+
+columns_to_check  <- c("Score1_GLN", "Score1_bigstatsr", glue("PGS_{diagnosis}"), glue("FGRS_{diagnosis}"))
+df %>% 
+select(all_of(columns_to_check)) %>%
+map_dfr(~ sum(is.na(.)))
+
+df15i %>% 
+select(all_of(columns_to_check)) %>%
+map_dfr(~ sum(is.na(.)))
+# 5 NAs in FGRS_bipol?
+
+df %>% 
+select(all_of(contains("PGS")), all_of(contains("FGRS"))) %>%
+map_dfr(~ sum(is.na(.)))
+# 0
+
+pgss_fgrss_15i %>% 
+select(all_of(contains("PGS")), all_of(contains("FGRS"))) %>%
+map_dfr(~ sum(is.na(.)))
+# 5 NAs in all FGRSs in iPSYCH2015i but none in iPSYCH2012
+
+pgss_fgrss_15i %>%
+filter(is.na(FGRS_bipol))
+# it's ID 8651705 which is missing from all diagnoses, and it was a control so we don't care that much I think
+
+# I'll try to run it with it having NA, let's see if it works
+
+####################################################################################
+####################################################################################
+
+
+saveRDS(df15i, file.path("iPSYCH2015i_preds", glue("all_{cohort}.rds")))
+
+
+
+
+all12  <- readRDS(glue("iPSYCH2012_preds/all_iPSYCH2012_EurUnrel.rds"))
+all15i  <- readRDS(file.path("iPSYCH2015i_preds", glue("all_{cohort}.rds")))
+
+# TODO: clean these to properly format them removing the True_Lable column which can be confusing
+
+
+all12 %>% 
+filter(Diagnosis == "BIP") %>%
+count(bipol_nodiagkontrol2015I)
+
+
+
+```
+
+# RUN LogReg on genomeDK
+```{r}
+
+#-
+source("/faststorage/jail/project/igpv/scripts/functions.R")
+library(tidymodels)
+tidymodels_prefer()
+library(doParallel)
+library(batchtools)
+library(future.batchtools)
+options(tidymodels.dark = TRUE)
+
+
+# # # TO UNCOMMENT TO RUN ON INTERACTIVE NODE TO TROUBLESHOOT
+DIAGNOSIS  <- "BIP"
+diagnosis  <- "bipol"
+FEATURE_SET  <- "PGSp-FGRSp"
+cohort  <- "iPSYCH2012_EurUnrel"
+set  <- "train_valid"
+experiment  <- "experiment1"
+diagnoses_small  <- c("adhd", "autism", "bipol", "majordd", "skizo")
+parallel  <- FALSE
+save_workflow <- TRUE
+save_predictions = TRUE
+n_inters  <- "all"
+
+
+
+# I put everything in a function so I sbatch slurm jobs with batchtools
+process_diagnosis  <- function(DIAGNOSIS, cohort, parallel, save_workflow, save_predictions, covariates, set, experiment, output_folder, boots){
+
+    source("/faststorage/jail/project/igpv/scripts/functions.R")
+    options(tidymodels.dark = TRUE)
+    covs_formula  <- paste(covariates, collapse = " + ")
+    cohort_short  <- str_replace(cohort, "_EurUnrel", "")
+    diagnosis  <- dict_cap_to_small[[DIAGNOSIS]]    
+
+    message(glue("Processing {DIAGNOSIS} training in cohort {cohort}"))
+    library(bigstatsr)
+    library(tidymodels)
+    tidymodels_prefer()
+
+
+    diagnosis_nodiagkontrol <- dict_cap_to_small_nodiagkontrol2015I[[DIAGNOSIS]]  
+
+    df  <- readRDS(glue("iPSYCH2012_preds/all_iPSYCH2012_EurUnrel.rds")) %>% 
+    filter(Diagnosis == DIAGNOSIS) %>% 
+    rename(!!sym(DIAGNOSIS) := !!sym(diagnosis_nodiagkontrol)) %>% 
+    mutate(!!sym(DIAGNOSIS) := as.factor(!!sym(DIAGNOSIS))) %>% 
+    mutate(Cohort = "iPSYCH2012")
+
+    df15i <- readRDS(file.path("iPSYCH2015i_preds", glue("all_iPSYCH2015i_EurUnrel.rds"))) %>% 
+    filter(Diagnosis == DIAGNOSIS) %>%
+    rename(!!sym(DIAGNOSIS) := !!sym(diagnosis_nodiagkontrol)) %>%
+    mutate(!!sym(DIAGNOSIS) := as.factor(!!sym(DIAGNOSIS))) %>% 
+    mutate(Cohort = "iPSYCH2015i") %>% 
+    mutate(kfold = "replication") %>% 
+    mutate(Split = "replication")
+
+
+
+    allsplits_file  <- glue("/faststorage/jail/project/igpv/backup/metadata/iPSYCH2012_EurUnrel/{diagnosis}/all_splits_genotypes_{diagnosis}_nodiagkontrol2015I_iPSYCH2012_EurUnrel.csv")
+    allsplits  <- read_csv(allsplits_file) %>% 
+    select(ID, split, kfold)
+
+
+
+    # alltrainsplits_path  <- glue("/faststorage/jail/project/igpv/backup/metadata/{cohort}/{diagnosis}/genotypes/csv/")
+
+
+    # alltrainsplits_files  <- list.files(alltrainsplits_path, pattern = "train_[0-9].*.csv", full.names = TRUE, recursive = TRUE)
+
+    # alltrainsplits  <- map(alltrainsplits_files, ~ read_csv(.x)) %>% reduce(bind_rows)
+
+
+    df  <- left_join(df, allsplits)
+
+    df15  <- bind_rows(df, df15i)
+
+    df15 %>% 
+    count(Cohort, !!sym(DIAGNOSIS))
+
+    mysplits  <- make_splits(
+    x = filter(df, Split == "train_valid"),
+    assessment = filter(df, Split == "test")
+    )
+
+    df_train  <- training(mysplits)
+    df_test  <- assessment(mysplits)
+
+
+    create_train_test_resample  <- function(df){
+
+    train_rows  <- which(df$Split == "train_valid")
+    test_rows  <- which(df$Split == "test")
+
+    # train_rows  <- which(df$Split == "train_valid")
+    # test_rows  <- which(df$Split == "test")
+    indices <- list(
+        list(analysis = train_rows, assessment = test_rows)
+        )
+    splits <- lapply(indices, make_splits, data = df)
+    output  <- manual_rset(splits, c("Fold1"))
+    return(output)
+    }
+
+    train_test_fold1  <- create_train_test_resample(df)
+
+    message("Train_test_fold1")
+    train_test_fold1
+    # test_train_test_fold1  <- assessment(train_test_fold1[[1]][[1]]) %>% 
+    # arrange(ID)
+
+
+    # # 5-CV
+    # # TODO: implement 5-CV
+    # # I need a column kfold
+
+    # # 5 training sets, evaluated on 5 validation sets
+    train_valid_5folds <- create_validation_folds(df_train, "kfold")
+
+    message("Train_valid_5folds")
+    train_valid_5folds
+    # # 5 training sets, evaluated on 1 test set
+    train_test_5folds <- create_validation_test_folds(df, "kfold")
+
+    message("Train_test_5folds")
+    train_test_5folds
+
+    train_repl_5folds  <- create_train_folds_for_replic_15i(df15, "kfold")
+
+    message("Train_repl_5folds")
+    train_repl_5folds
+
+
+    diag_formula  <- as.formula(glue("{DIAGNOSIS} ~ ."))
+    diag_cov_formula  <- as.formula(glue("{DIAGNOSIS} ~ {covs_formula}"))
+
+    base_rec  <- 
+    recipe(diag_formula, data = df_train) %>% 
+    update_role(all_predictors(), new_role = "ID") %>%
+    # update_role(!!!covariates, new_role = "ID") %>% 
+    step_zv(all_numeric_predictors()) %>%
+    step_normalize(all_numeric_predictors())
+
+
+    # base_rec  %>% prep() %>% summary() %>% filter(role == "predictor")
+
+    features  <- df %>% select(contains("PGS"), contains("FGRS"), contains("bigstatsr"), contains("GLN")) %>% colnames()
+
+
+    PGS_col  <- glue("PGS_{diagnosis}")
+    FGRS_col  <- glue("FGRS_{diagnosis}")
+    GLN_col  <- "Score1_GLN"
+    bigstatsr_col  <- "Score1_bigstatsr"
+
+    ################################
+    # A: 1 Feature at a time
+    ################################
+    rec_1_PGS  <- base_rec %>%
+    update_role(!!PGS_col, new_role = "predictor")
+
+
+    rec_2_FGRS  <- base_rec %>%
+    update_role(!!FGRS_col, new_role = "predictor")
+
+    rec_3_bigstatsr  <- base_rec %>%
+    update_role(!!bigstatsr_col, new_role = "predictor")
+
+    rec_4_GLN  <- base_rec %>%
+    update_role(!!GLN_col, new_role = "predictor")
+
+
+    generate_interaction_formula <- function(cols) {
+      interaction_terms <- unlist(lapply(2:length(cols), function(k) {
+        combn(cols, k, FUN = function(x) paste(x, collapse = ":"))
+      }))
+      inters_string <- paste(interaction_terms, collapse = "+")
+      inters_formula <- as.formula(paste("~", inters_string))
+      return(inters_formula)
+    }
+
+
+
+    ################################
+    # B: 2 Features at a time with and without interaction
+    ################################
+    rec_5_PGS_FGRS_nointer <- base_rec %>%
+    update_role(!!PGS_col, new_role = "predictor") %>%
+    update_role(!!FGRS_col, new_role = "predictor")
+
+    rec_6_PGS_FGRS_inter <- rec_5_PGS_FGRS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(PGS_col, FGRS_col)))
+
+    rec_7_GLN_bigstatsr_nointer  <- rec_3_bigstatsr %>%
+    update_role(!!GLN_col, new_role = "predictor")
+
+    rec_8_GLN_bigstatsr_inter  <- rec_7_GLN_bigstatsr_nointer  %>%
+    step_interact(terms = generate_interaction_formula(cols = c(GLN_col, bigstatsr_col)))
+
+    ################################
+    # C: Comparison vs Clara Meta-PRS
+    ################################
+
+    rec_9_bigstatsr_PGS_nointer  <- rec_1_PGS %>%
+    update_role(!!bigstatsr_col, new_role = "predictor")
+
+    rec_10_bigstatsr_PGS_inter  <- rec_9_bigstatsr_PGS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(bigstatsr_col, PGS_col)))
+    
+    rec_9_bigstatsr_FGRS_nointer  <- rec_2_FGRS %>%
+    update_role(!!bigstatsr_col, new_role = "predictor")
+
+    rec_10_bigstatsr_FGRS_inter  <- rec_9_bigstatsr_FGRS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(bigstatsr_col, FGRS_col)))
+
+    rec_11_GLN_PGS_nointer  <- rec_1_PGS %>%
+    update_role(!!GLN_col, new_role = "predictor")
+
+    rec_12_GLN_PGS_inter  <- rec_11_GLN_PGS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(GLN_col, PGS_col)))
+
+
+    ################################
+    # D: 3 Features at a time with and without interaction
+    ################################
+
+    rec_13_GLN_PGS_FGRS_nointer  <- rec_5_PGS_FGRS_nointer %>%
+    update_role(!!GLN_col, new_role = "predictor")
+
+    rec_14_GLN_PGS_FGRS_inter  <- rec_13_GLN_PGS_FGRS_nointer %>% 
+    step_interact(terms = generate_interaction_formula(cols = c(GLN_col, PGS_col, FGRS_col)))
+
+
+    rec_15_bigstatsr_PGS_FGRS_nointer  <- rec_5_PGS_FGRS_nointer %>%
+    update_role(!!bigstatsr_col, new_role = "predictor")
+
+    rec_16_bigstatsr_PGS_FGRS_inter  <- rec_15_bigstatsr_PGS_FGRS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(bigstatsr_col, PGS_col, FGRS_col)))
+
+
+    ################################
+    # E: 4 Features at a time with and without interaction
+    ################################
+
+    rec_160_GLN_bigstatsr_PGS_nointer  <- base_rec %>%
+    update_role(!!GLN_col, new_role = "predictor") %>%
+    update_role(!!bigstatsr_col, new_role = "predictor") %>% 
+    update_role(!!PGS_col, new_role = "predictor")
+
+    rec_161_GLN_bigstatsr_PGS_inter  <- rec_160_GLN_bigstatsr_PGS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(GLN_col, bigstatsr_col, PGS_col)))
+
+    rec_161_GLN_bigstatsr_FGRS_nointer  <- base_rec %>%
+    update_role(!!GLN_col, new_role = "predictor") %>%
+    update_role(!!bigstatsr_col, new_role = "predictor") %>%
+    update_role(!!FGRS_col, new_role = "predictor")
+
+    rec_162_GLN_bigstatsr_FGRS_inter  <- rec_161_GLN_bigstatsr_FGRS_nointer %>%
+    step_interact(terms = generate_interaction_formula(cols = c(GLN_col, bigstatsr_col, FGRS_col)))
+    
+
+
+
+    rec_17_GLN_bigstatsr_PGS_FGRS_nointer  <- rec_13_GLN_PGS_FGRS_nointer  %>%
+    update_role(!!bigstatsr_col, new_role = "predictor")
+
+    rec_18_GLN_bigstatsr_PGS_FGRS_inter  <- rec_17_GLN_bigstatsr_PGS_FGRS_nointer  %>%
+    update_role(!!bigstatsr_col, new_role = "predictor") %>% 
+    step_interact(terms = generate_interaction_formula(cols = c(GLN_col, bigstatsr_col, PGS_col, FGRS_col)))
+
+
+
+    #####
+
+    list_models <- list(
+    rec_1_PGS = rec_1_PGS,
+    rec_2_FGRS = rec_2_FGRS,
+    rec_3_bigstatsr = rec_3_bigstatsr,
+    rec_4_GLN = rec_4_GLN,
+    rec_5_PGS_FGRS_nointer = rec_5_PGS_FGRS_nointer,
+    rec_6_PGS_FGRS_inter = rec_6_PGS_FGRS_inter,
+    rec_9_bigstatsr_FGRS_nointer = rec_9_bigstatsr_FGRS_nointer,
+    rec_10_bigstatsr_FGRS_inter = rec_10_bigstatsr_FGRS_inter,
+    rec_7_GLN_bigstatsr_nointer = rec_7_GLN_bigstatsr_nointer,
+    rec_8_GLN_bigstatsr_inter = rec_8_GLN_bigstatsr_inter,
+    rec_9_bigstatsr_PGS_nointer = rec_9_bigstatsr_PGS_nointer,
+    rec_10_bigstatsr_PGS_inter = rec_10_bigstatsr_PGS_inter,
+    rec_11_GLN_PGS_nointer = rec_11_GLN_PGS_nointer,
+    rec_12_GLN_PGS_inter = rec_12_GLN_PGS_inter,
+    rec_13_GLN_PGS_FGRS_nointer = rec_13_GLN_PGS_FGRS_nointer,
+    rec_14_GLN_PGS_FGRS_inter = rec_14_GLN_PGS_FGRS_inter,
+    rec_15_bigstatsr_PGS_FGRS_nointer = rec_15_bigstatsr_PGS_FGRS_nointer,
+    rec_16_bigstatsr_PGS_FGRS_inter = rec_16_bigstatsr_PGS_FGRS_inter,
+    rec_160_GLN_bigstatsr_PGS_nointer = rec_160_GLN_bigstatsr_PGS_nointer,
+    rec_161_GLN_bigstatsr_PGS_inter = rec_161_GLN_bigstatsr_PGS_inter,
+    rec_161_GLN_bigstatsr_FGRS_nointer = rec_161_GLN_bigstatsr_FGRS_nointer,
+    rec_162_GLN_bigstatsr_FGRS_inter = rec_162_GLN_bigstatsr_FGRS_inter,
+    rec_17_GLN_PGS_FGRS_bigstatsr_nointer = rec_17_GLN_PGS_FGRS_bigstatsr_nointer,
+    rec_18_GLN_PGS_FGRS_bigstatsr_inter = rec_18_GLN_PGS_FGRS_bigstatsr_inter
+    )
+
+   
+    # Declare model to use
+    logreg_mod <- logistic_reg() %>% set_engine("glm")
+
+   
+
+    all_models <- workflow_set(preproc = list_models, models = list(lm = logreg_mod), cross = TRUE)
+
+
+
+    classif_metrics  <- metric_set(roc_auc, accuracy, sens, mcc, precision, recall, pr_auc,f_meas)
+
+   
+
+    keep_coef_preds_parall <- control_grid(extract = get_lm_fit_and_coefs, save_pred = TRUE, save_workflow = save_workflow, verbose = TRUE, parallel_over = "everything")
+
+
+
+    ################################
+    # Logistic Regression without CV. Training on entire training set and evaluating on test 
+    ################################
+    # mysplits
+    train_test_wflowset <- 
+    all_models %>% 
+    workflow_map("fit_resamples", 
+                # Options to `workflow_map()`: 
+                seed = 42, verbose = TRUE, 
+                resamples = train_test_fold1, control = keep_coef_preds_parall,
+                metrics = classif_metrics)
+
+    ##########################################################
+    # Logistic Regression with 5-CV and evaluating on test set
+    ##########################################################
+
+    train_test_5CV_wflowset <- 
+    all_models %>% 
+    workflow_map("fit_resamples", 
+                # Options to `workflow_map()`: 
+                seed = 42, verbose = TRUE, 
+                resamples = train_test_5folds, control = keep_coef_preds_parall,
+                metrics = classif_metrics)
+
+    ##########################################################
+    # Logistic Regression with 5-CV on training folds of 2012 and evaluating on entire 2015i
+    ##########################################################
+
+    train_ipsych15i_5CV_wflowset <- 
+    all_models %>% 
+    workflow_map("fit_resamples", 
+                # Options to `workflow_map()`: 
+                seed = 42, verbose = TRUE, 
+                resamples = train_repl_5folds, control = keep_coef_preds_parall,
+                metrics = classif_metrics)
+
+
+
+
+    df_equality_check  <- all.equal(extract_coef_wflow_set(train_test_5CV_wflowset), extract_coef_wflow_set(train_ipsych15i_5CV_wflowset))
+
+
+    assert_that(length(df_equality_check) == 1, msg = "The two dfs containing the coefficients of the two runs are not equal. `df_equality_check` is not of length 1")
+
+
+
+    ##########################################################
+    # Logistic Regression with 5-CV and evaluating on 5 validation set
+    ##########################################################
+
+    train_valid_5CV_wflowset <- 
+    all_models %>% 
+    workflow_map("fit_resamples", 
+                # Options to `workflow_map()`: 
+                seed = 42, verbose = TRUE, 
+                resamples = train_valid_5folds, control = keep_coef_preds_parall,
+                metrics = classif_metrics)
+
+
+###############
+##############################
+###############
+
+
+library(caret)
+coef_to_liab <- function(K_pop, K_gwas = 0.5) {
+# Taken from package bigsnpr on the 17/02/2024
+
+z <- stats::dnorm(stats::qnorm(min(K_pop, 1 - K_pop)))
+
+(K_pop * (1 - K_pop) / z)^2 / (K_gwas * (1 - K_gwas))
+}
+prevalence  <- dict_cap_to_prev[[DIAGNOSIS]]
+
+library(bigstatsr)
+library(bigassertr)
+
+save_metrics_and_preds <- function(workflow_set, all_models, DIAGNOSIS, dict_cap_to_prev, output_folder, suffix = "", Split_eval = "", Split_trained = "", CV = "", boots = 10000) {
+
+
+
+    metrics  <- collect_metrics(workflow_set) %>% 
+        mutate(Split_eval = Split_eval,
+        CV = CV,
+        Split_trained = Split_trained,
+        Diagnosis = diagnosis) %>% 
+        rename(Features_set = wflow_id, 
+        Model = model) %>% 
+        mutate(Features_set = fct_relevel(Features_set, all_models$wflow_id)) %>% 
+        rename(metric = .metric,
+        estimate = mean)
+
+    if(suffix == "train_test_noCV"){
+      row_to_ID_mapping  <- df %>% 
+      mutate(.row = row_number()) %>%
+      filter(Split == "test") %>% 
+      select(ID, .row, !!ensym(DIAGNOSIS))
+    } else if(suffix == "train_test_5CV"){
+      row_to_ID_mapping  <- df %>% 
+      mutate(.row = row_number()) %>%
+      filter(Split == "test") %>% 
+      select(ID, .row, !!ensym(DIAGNOSIS))
+    } else if(suffix == "train_valid_5CV"){
+      # row_to_ID_mapping  <- df_train %>%
+      # mutate(.row = row_number()) %>%
+      # select(ID, .row)
+      row_to_ID_mapping  <- df %>% 
+      mutate(.row = row_number()) %>%
+      filter(Split == "train_valid") %>% 
+      select(ID, .row, !!ensym(DIAGNOSIS))
+    } else if(suffix == "train_iPSYCH2015i_5CV"){
+      row_to_ID_mapping <- df15 %>% 
+      mutate(.row = row_number()) %>%
+      filter(Split == "replication") %>% 
+      select(ID, .row, !!ensym(DIAGNOSIS))
+    }
+
+    # Collect all predictions from test set
+    preds  <- collect_predictions(workflow_set, summarize = FALSE) %>% 
+        mutate(Split_eval = Split_eval,
+        CV = CV,
+        Split_trained = Split_trained,
+        Diagnosis = diagnosis) %>% 
+        select(wflow_id, model, .row, .pred_0, .pred_1, !!ensym(DIAGNOSIS), .pred_class, Diagnosis, Split_trained, Split_eval, CV) %>% 
+        rename(Features_set = wflow_id, 
+        Model = model) %>% 
+        mutate(Features_set = fct_relevel(Features_set, all_models$wflow_id)) %>% 
+        left_join(row_to_ID_mapping)
+
+
+
+    preds_avg  <- preds %>% 
+    group_by(ID, Features_set, Model, Split_trained, Split_eval, CV, !!ensym(DIAGNOSIS), Diagnosis, .pred_class)  %>% 
+    summarise(avg_pred_0 = mean(.pred_0),
+    avg_pred_1 = mean(.pred_1),
+    std_pred_0 = sd(.pred_0),
+    std_pred_1 = sd(.pred_1)) %>% 
+    ungroup() %>% 
+    filter(!is.na(avg_pred_1))
+
+    # print confusion matrix
+    # lg_tpreds %>%
+    # filter(Diagnosis == diag) %>%
+    # filter(!str_detect(wflow_id, "Null")) %>%
+    # filter(wflow_id == "covariates") %>%
+    # # group_by(wflow_id, Split_trained, Split_eval, CV, Diagnosis) %>%
+    # conf_mat(.,!!ensym(diag), .pred_class) %>% 
+    # autoplot(type = "heatmap")+
+    # ggtitle(glue("Confusion matrix for {diag}"))
+
+    message("Calculating AUC and then R2 on Liability scale")
+
+
+    preds_roc_aucs_boot <- preds_avg %>% 
+        mutate(
+        !!ensym(DIAGNOSIS) := as.numeric(as.character(!!ensym(DIAGNOSIS)))) %>% 
+        group_by(Features_set, Model, Split_trained, Split_eval, CV, Diagnosis) %>% 
+        summarise({
+        auc_results = AUCBoot(avg_pred_1, !!sym(DIAGNOSIS), nboot = boots)
+        avg_roc_auc = auc_results[[1]]
+        std_roc_auc = auc_results[[4]]
+        lower_roc_auc = auc_results[[2]]
+        upper_roc_auc = auc_results[[3]]
+        tibble(avg_roc_auc, std_roc_auc, lower_roc_auc, upper_roc_auc)
+        }) %>%
+        ungroup() %>% 
+        pivot_longer(cols = -c(Features_set, Model, Split_trained, Split_eval, CV, Diagnosis), names_to = "metric", values_to = "estimate")
+
+    metrics_r2 <- preds_avg %>% 
+        mutate(
+        !!ensym(DIAGNOSIS) := as.numeric(as.character(!!ensym(DIAGNOSIS)))) %>% 
+        group_by(Features_set, Model, Split_trained, Split_eval, CV, Diagnosis) %>% 
+        summarise({
+          r2_results = R2Boot(avg_pred_1, !!sym(DIAGNOSIS), nboot = boots)
+          avg_r2 = r2_results[[1]]
+          std_r2 = r2_results[[4]]
+          lower_r2 = r2_results[[2]]
+          upper_r2 = r2_results[[3]]
+          m_case = mean(!!sym(DIAGNOSIS))
+          tibble(avg_r2, std_r2, lower_r2, upper_r2, m_case)
+        }) %>% 
+        ungroup() %>% 
+        mutate(coef_to_liab = map2_dbl(prevalence, m_case, ~coef_to_liab(K_pop = .x, K_gwas = .y)),
+        avg_r2 = avg_r2 * coef_to_liab,
+        std_r2 = std_r2 * coef_to_liab,
+        lower_r2 = lower_r2 * coef_to_liab,
+        upper_r2 = upper_r2 * coef_to_liab) %>% 
+        mutate(Features_set = fct_relevel(Features_set, all_models$wflow_id)) %>% 
+        pivot_longer(cols = -c(Features_set, Model, Split_trained, Split_eval, CV, Diagnosis), names_to = "metric", values_to = "estimate")
+
+    metrics  <- bind_rows(metrics, preds_roc_aucs_boot, metrics_r2)
+
+
+    # if directory doesn't exist, create it
+
+    if (!file.exists(output_folder)) dir.create(output_folder, showWarnings = TRUE)
+    output_folder  <- glue("{output_folder}/{cohort}")
+    if (!file.exists(output_folder)) dir.create(output_folder, showWarnings = TRUE)
+    saveRDS(metrics, file.path(output_folder, glue("{DIAGNOSIS}_metrics_{suffix}.rds")))
+    saveRDS(preds, file.path(output_folder, glue("{DIAGNOSIS}_preds_{suffix}.rds")))
+}
+
+# boots = 10000
+
+save_metrics_and_preds(train_test_wflowset, all_models, DIAGNOSIS, dict_cap_to_prev, output_folder, suffix = "train_test_noCV", Split_eval = "test", Split_trained = "train_valid", CV = "No-CV", boots = boots)
+
+save_metrics_and_preds(train_test_5CV_wflowset, all_models, DIAGNOSIS, dict_cap_to_prev, output_folder, suffix = "train_test_5CV", Split_eval = "test", Split_trained = "train_valid", CV = "5-CV", boots = boots)
+
+save_metrics_and_preds(train_valid_5CV_wflowset, all_models, DIAGNOSIS, dict_cap_to_prev, output_folder, suffix = "train_valid_5CV", Split_eval = "valid", Split_trained = "train_valid", CV = "5-CV", boots = boots)
+
+
+save_metrics_and_preds(train_ipsych15i_5CV_wflowset, all_models, DIAGNOSIS, dict_cap_to_prev, output_folder, suffix = "train_iPSYCH2015i_5CV", Split_eval = "iPSYCH2015i", Split_trained = "train_2012", CV = "5-CV", boots = boots)
+
+
+output_folder  <- glue("{output_folder}/{cohort}")
+
+# Here I extract the glm models and save them in a dataframe if I want to use them later
+models_df  <- map_dfr(train_test_wflowset$wflow_id, ~extract_models(train_test_wflowset, .x))
+saveRDS(models_df, file.path(output_folder, glue("{DIAGNOSIS}_models_train_test_noCV.rds")))
+
+models_df <- map_dfr(train_test_5CV_wflowset$wflow_id, ~extract_models(train_test_5CV_wflowset, .x))
+saveRDS(models_df, file.path(output_folder, glue("{DIAGNOSIS}_models_train_test_5CV.rds")))
+
+models_df <- map_dfr(train_valid_5CV_wflowset$wflow_id, ~extract_models(train_valid_5CV_wflowset, .x))
+saveRDS(models_df, file.path(output_folder, glue("{DIAGNOSIS}_models_train_valid_5CV.rds")))
+
+}
+
+diagnoses_small  <- c("adhd", "autism", "bipol", "majordd", "skizo")
+
+parallel  <- FALSE
+save_workflow <- TRUE
+save_predictions  <-  TRUE
+# n_inters  <- "all"
+
+set  <- "train_valid"
+covariates  <- c("sex", "age_2016", paste("PC", 1:10, sep = ""))
+covs_formula  <- paste(covariates, collapse = " + ")
+
+FEATURE_SET  <- "PGSp-FGRSp"
+# DIAGNOSES  <- c("ADHD", "ASD", "BIP", "MDD", "SCZ")
+DIAGNOSES  <- c("BIP", "SCZ", "ADHD", "ASD","MDD")
+DIAGNOSIS  <- "BIP"
+# DIAGNOSES  <- c("BIP")
+cohorts  <- c("iPSYCH2012_EurUnrel")
+# cohorts  <- c("iPSYCH2012_EurUnrel")
+# cohort <- "iPSYCH2012_EurUnrel"
+
+diagnoses_cohorts  <- expand_grid(DIAGNOSIS = DIAGNOSES, cohort = cohorts)
+
+
+diagnoses_cohorts
+
+
+diagnoses_cohorts  <- diagnoses_cohorts %>% mutate(jobname = glue("{DIAGNOSIS}_{cohort}"))
+# diagnoses_cohorts  <- diagnoses_cohorts %>% slice(2)
+# n_inters  <- "all"
+
+date_time  <- format(Sys.time(), "%d_%m_%y_%H_%M")
+
+#############################################
+#############################################
+# TODO: DON'T FORGET TO CHANGE THIS FOR THE SPECIFIC EXPERIMENT
+#############################################
+#############################################
+suffix  <- "replic_15i"
+output_folder  <- glue("logreg_results_{date_time}_{suffix}")
+
+reg_string  <- glue("batchtools_reg_{date_time}_{suffix}")
+
+# if reg_string exists, create it with writable, otherwise load it
+if(file.exists(reg_string)){
+  reg  <- loadRegistry(file.dir = reg_string, writeable = TRUE)
+} else {
+  reg  <- makeRegistry(file.dir = reg_string, seed = 42)
+}
+
+
+reg$cluster.functions = makeClusterFunctionsSlurm("/home/leocob/batchtools_slurm/slurm2.tmpl")
+# reg$cluster.functions = makeClusterFunctionsSlurm("/home/leocob/batchtools_slurm/slurm_ripsych.tmpl")
+
+boots = 10000
+
+clearRegistry()
+batchMap(reg = reg, fun = process_diagnosis, DIAGNOSIS = diagnoses_cohorts$DIAGNOSIS, cohort = diagnoses_cohorts$cohort, more.args = list(parallel = parallel, save_workflow = save_workflow, save_predictions = save_predictions, covariates = covariates, output_folder = output_folder, boots = boots))
+
+
+
+# LOCALLY ------------------------------------------------
+# process_diagnosis("BIP", "iPSYCH2012_EurUnrel", FEATURE_SET, parallel, save_workflow, save_predictions, n_inters, covariates, covs_formula, set, experiment, run_additive = TRUE, run_onehot = TRUE, run_additive_quantiles = TRUE, run_onehot_quantiles = TRUE, outfolder)
+# ------------------------------------------------------------
+
+
+setJobNames(ids = 1:nrow(diagnoses_cohorts), names = diagnoses_cohorts$jobname, reg = reg)
+
+jobnames  <- getJobNames(); jobnames
+
+h_to_m <- function(hours, minutes) {
+  # Calculate the decimal time
+  decimal_time <- hours + minutes / 60
+  return(decimal_time*60)
+}
+
+h_to_m(11,59)
+
+# testJob(1)
+
+#############################################
+# TO RUN LOCALLY
+# submitJobs()
+#############################################
+
+# testJob(1)
+
+
+submitJobs(resources = list(time = h_to_m(11,00), mem = "40G", cpus_per_task = 2))
+
+
+```

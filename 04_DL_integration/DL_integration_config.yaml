@@ -1,0 +1,166 @@
+# Snakemake global configs ---------------------------------------------------------------------
+## Choose suffix to append to output folder, e.g. to identify the experiment ran like l1_hyper_tuning
+# NB: DO NOT WRITE ANY DOT HERE
+suffix_output_folder: "Informed~GLN-best~genotype~no-LoF"
+
+
+
+suffix_output_folder_withtab : "Informed~GLN-best~genotype~FH_FGRS_PGS"
+# suffix_output_folder_withtab : "Informed~GLN-best~genotype~otherdiag_cov_FH_FGRS_PGS"
+# config["suffix_output_folder"] = config["suffix_output_folder_withtab"]
+gpu_or_cpu: "gpu" # or "gpu"
+## Name of project to bill on genomeDK
+project: "igpv"
+
+## N.B. don't forget to check the snp_file option at the bottom of the yaml
+## N.B. don't forget to change omics from genotype-as-array if I run it on genotype data 
+cohort: "iPSYCH2012_EurUnrel"
+
+control: "nodiagkontrol2015I"
+
+metadata_path: "/faststorage/jail/project/igpv/backup/metadata/"
+
+# HYPERPARAMETER TUNING if num_combs is > 1
+num_combs: 1
+
+kfold_splits: 5
+
+## Launch EIR in Single Task (ST) or in Multi Task (MT) mode
+task_type: "ST"
+diagnoses_to_run:
+    - adhd
+    - skizo
+    - bipol
+    - autism
+    - majordd
+
+tabdata:
+    - bigstatsr
+    - FGRSp
+    - PGSp
+    - bigstatsr-PGSp
+    - bigstatsr-PGSp-FGRSp
+    - PGSp-FGRSp
+
+
+thresholds:
+  - 0.05
+
+
+input_type:
+    onlygen: "gln"
+    withtabs: "gln"
+    onlycov: "tabular"
+    gencov:
+        - "gln"
+        - "tabular"
+
+
+# EIR configs ---------------------------------------------------------------------
+
+## global config
+global_config:
+    compute_attributions: false
+    output_folder: FILL
+    checkpoint_interval: FILL
+    sample_interval: FILL
+    cat_averaging_metrics: 
+        - roc-auc-macro
+    # To adjust how often we do the validation I need to adjust the two of the above together. Both to e.g. 200
+    batch_size: 64
+    lr: 0.0002
+    gradient_clipping: 1.0
+    lr_plateau_patience: 5
+    optimizer: "adabelief"
+    log_level: "debug"
+    manual_valid_ids_file: FILL
+    n_epochs: 500
+    # device: "cpu"
+    # device: "cuda:0"
+    dataloader_workers: 4
+    early_stopping_buffer: 2000
+    early_stopping_patience: 10
+    attribution_background_samples: 32
+    max_attributions_per_class: 500
+    attributions_every_sample_factor: 5
+    mixing_alpha: 0.2
+
+    weighted_sampling_columns: 
+    - all
+
+## fusion config
+fusion_config:
+    model_type: mlp-residual
+    model_config:
+        rb_do: 0.1
+        fc_do: 0.1
+        fc_task_dim: 512
+        layers:
+            - 2
+        stochastic_depth_p: 0.1
+
+## output config
+output_config:
+    output_info:
+        output_name: FILL
+        output_source: FILL # old label_file option
+        output_type: tabular
+    output_type_info:
+        target_cat_columns:
+            - FILL   
+    model_config:
+        model_type: "mlp_residual"
+        model_init_config:
+            rb_do: 0.2
+            fc_do: 0.2
+            fc_task_dim: 512
+            layers: 
+            - 2
+            stochastic_depth_p: 0.2
+            final_layer_type: "linear"
+
+## input gln config (to use genotype data)
+input_gln_config:
+    input_info:
+        input_source: "/home/leocob/igpv/backup/iPSYCH2012/iPSYCH2012_genotypes_arrays_11_mill_noqc/processed/full_inds/full_chrs/encoded_outputs"
+        input_name: genotype
+        input_type: omics
+        # input_name: genotype_as_array
+        # input_type: array
+
+    input_type_info:
+        mixing_subtype: "cutmix-block"
+        na_augment_perc: FILL
+        na_augment_prob: 1.0 # if I do the operation or not
+        snp_file: "/home/leocob/igpv/backup/iPSYCH2012/iPSYCH2012_genotypes_arrays_11_mill_noqc/interim/0_filtering_files/2_data_recoded/full_inds/full_chrs/data_plink_processed.bim"
+
+
+
+    model_config:
+        model_type: "genome-local-net"
+        model_init_config:
+            rb_do: FILL
+            channel_exp_base: FILL
+            kernel_width: FILL
+            first_kernel_expansion: -4
+            l1: 0.0
+            cutoff: 4096
+
+## input tabular config
+input_tabular_config:
+    input_info:
+        input_source: FILL
+        input_name: input_tabular
+        input_type: tabular
+
+
+
+    model_config:
+        model_type: tabular
+        model_init_config:
+            fc_layer: true
+
+
+
+
+

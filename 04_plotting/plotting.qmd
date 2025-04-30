@@ -1,0 +1,4236 @@
+---
+title: "plotting.qmd"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+# Intro
+Disclaimer: this code is a mess, doesn't follow DRY principles, and I wrote it in a hurry. But it works!
+If you're a prospective employer, please don't judge me too much and know that I'm able to write clean code when I need to :P
+
+# Libraries
+```{r}
+
+# working_env  <- "genomedk"
+working_env  <- "local"
+date  <- "29_04_2025"
+
+final_folder  <- "/Users/lmz306/Library/CloudStorage/OneDrive-UniversityofCopenhagen/igpv/eir_psy/results/2024-05-28-Plots_paper/paper_final_29_04_2025"
+
+library(tidyverse)
+library(ggpattern)
+library(glue)
+library(rstatix)
+library(ggbreak)
+library(ggrepel)
+library(tidymodels)
+library(readxl)
+library(tidytext) # for scale_x_reordered()
+library(patchwork)
+library(openxlsx)
+library(plotly)
+library(gt) 
+library(gtsummary)
+library(GGally)
+library(ggpmisc)
+library(glue)
+library(ggpubr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+# library(gt)
+library(insight)
+library(ggpattern)
+library(rlang)
+
+figs_path  <- "/Users/lmz306/Library/CloudStorage/OneDrive-UniversityofCopenhagen/igpv/eir_psy/results/2024-05-28-Plots_paper/figs_paper_28_04_25"
+
+
+
+
+#-
+my_theme <- theme_bw() + 
+theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(hjust = 0.5, color = "black"),
+  text=element_text(size=30, color = "black"),
+  panel.border = element_rect(linewidth = 2, color = "black"),
+  strip.background = element_blank(),
+  axis.ticks.x = element_blank(),  # Remove x ticks
+  axis.text.y.right = element_blank(),
+  axis.line.y.right = element_blank(),
+  axis.ticks.y.right = element_blank(),
+  # center x label under the tick
+    # axis.text.x = element_text(hjust = 0.5),
+  # axis.ticks.x = element_blank(),
+  # change all text color to black
+  axis.text = element_text(color = "black"),
+  axis.text.x = element_text(hjust = 0.5),
+  legend.key = element_rect(linewidth = unit(1, "cm")),  # Set fixed size for legend keys
+  legend.key.size = unit(1, "cm"),                  # Make legend keys square
+  legend.key.height = unit(1, "cm"),                # Ensure height matches width
+  legend.key.width = unit(1, "cm")                  # Ensure width matches height
+  # axis.text.x = element_text(color = "black"),
+)
+# Do not set it to not mess with ggbreak
+# theme_set(my_theme)
+suffix_delta_eval  <- " in iPSYCH2"
+suffix_delta_model  <- " with DL"
+
+current_dir  <- file.path(".")
+
+if (working_env == "local"){
+  message("Working environment: local")
+  setwd("/Users/lmz306/Library/CloudStorage/OneDrive-UniversityofCopenhagen/igpv/eir_psy/results/2024-05-28-Plots_paper")
+  source("/Users/lmz306/Library/CloudStorage/OneDrive-UniversityofCopenhagen/igpv/scripts/functions.R")
+  source("plotting_functions.R")
+  remove_ADHD  <- FALSE
+} else if (working_env == "genomedk"){
+  message("Working environment: genomedk")
+  setwd("/faststorage/jail/project/igpv/eirpsy/results/2024-05-28-Plots_paper")
+  source("/faststorage/jail/project/igpv/scripts/functions.R")
+  source("plotting_functions.R")
+  remove_ADHD  <- FALSE
+}
+
+if(!dir.exists("plots_paper_final")){
+  dir.create("plots_paper_final")
+}
+
+if(!dir.exists(glue("plots_paper_final/data_{date}"))){
+  dir.create(glue("plots_paper_final/data_{date}"))
+}
+if(!dir.exists(glue("plots_paper_final/figs_{date}"))){
+  dir.create(glue("plots_paper_final/figs_{date}"))
+}
+
+hypers_changed  <- c(
+"kernel_width_input_gln_config", "channel_exp_base_input_gln_config", "rb_do_input_gln_config", "na_augment_perc_input_gln_config")
+hypers_changed_short  <- str_replace(hypers_changed, "_input_gln_config", "")
+
+add_significance_leo <- function(data, sig_col_name, p_value_col_name) {
+  data %>%
+    mutate(!!sig_col_name := case_when(
+      !!sym(p_value_col_name) < 0.001 ~ "***",
+      !!sym(p_value_col_name) < 0.01 ~ "**",
+      !!sym(p_value_col_name) < 0.05 ~ "*",
+      TRUE ~ "ns"
+    ))
+}
+
+
+
+add_all_significance_columns <- function(data) {
+  data %>%
+    add_significance_leo(sig_col_name = "sig_nom", p_value_col_name = "p_value") %>% 
+    add_significance_leo(sig_col_name = "sig_bonf_diag", p_value_col_name = "p_value_bonf_diag") %>% 
+    add_significance_leo(sig_col_name = "sig_fdr_diag", p_value_col_name = "p_value_fdr_diag") %>% 
+    add_significance_leo(sig_col_name = "sig_bonf_all", p_value_col_name = "p_value_bonf_all") %>% 
+    add_significance_leo(sig_col_name = "sig_fdr_all", p_value_col_name = "p_value_fdr_all")
+}
+filter_out_ADHD  <- function(df){
+  if (remove_ADHD) {
+    df <- df %>% filter(Diagnosis != "ADHD") %>% 
+    mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+  }
+  return(df %>% 
+    mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+  )
+}
+
+
+metrics_r2 <- c("avg_r2", "std_r2", "lower_r2", "upper_r2")
+metrics_auroc <- c("avg_roc_auc", "std_roc_auc", "lower_roc_auc", "upper_roc_auc")
+
+metrics_auc  <- c("avg_auc", "sd_auc", "lower_auc", "upper_auc")
+count_cols  <- function(df){
+  # if there's column called Run and Model_type, include them in the count
+  if ("Run" %in% colnames(df) & "Model_type" %in% colnames(df)){
+    df %>% 
+    count(Model, Features, Run, Model_type, Interaction, CV, Split_trained, Split_eval) %>% print(n=Inf)
+  } else if ("Run" %in% colnames(df)){
+    df %>% 
+    count(Model, Features, Run, Interaction, CV, Split_trained, Split_eval) %>% print(n=Inf)
+  } else if ("Model_type" %in% colnames(df)){
+    df %>% 
+    count(Model, Features, Model_type, Interaction, CV, Split_trained, Split_eval) %>% print(n=Inf)
+  } else {
+    df %>% 
+    count(Model, Features, Interaction, CV, Split_trained, Split_eval) %>% print(n=Inf)
+  }
+}
+
+  apply_correct_multiple <- function(df, correct_multiple = TRUE){
+    if (correct_multiple == TRUE){
+      # Do your per-diagnosis p-value correction
+      df  <- df %>% group_by(Diagnosis) %>%
+      mutate(
+      p_value_bonf_diag = p.adjust(p_value, method = "bonferroni"),
+      p_value_fdr_diag  = p.adjust(p_value, method = "fdr")
+    ) %>%
+    ungroup() %>%
+    # Do your global p-value correction
+    mutate(
+      p_value_bonf_all = p.adjust(p_value, method = "bonferroni"),
+      p_value_fdr_all  = p.adjust(p_value, method = "fdr")
+    )
+  } else {
+    df <- df
+  }
+  return(df)
+  }
+
+#-
+compute_pvalues_comparisons <- function(to_compare, data, columns_to_group, runs_to_compare, filter_column, save_plots = TRUE, metric = "auc", folder_name = folder_name, correct_multiple = TRUE) {
+  require(dplyr)
+  require(tidyr)
+  require(purrr)
+  require(glue)
+
+  if (metric == "auc"){
+    metric_col <- "auc_replicates"
+  } else if (metric == "r2"){
+    metric_col <- "r2_replicates"
+  }
+
+  # message(glue("columns_to_group: {columns_to_group}"))
+  columns_to_group_list  <- list(columns_to_group)
+  # message(glue("columns_to_group_list: {columns_to_group_list}"))
+
+  data %>%
+    # Only keep rows whose `filter_column` value is in any run pair
+    group_by(across(all_of(columns_to_group))) %>% 
+    nest() %>% 
+
+    mutate(comparisons = pmap(list(data, !!!syms(columns_to_group)), function(group_data, ...) {
+      
+      map_dfr(runs_to_compare, function(pair) {
+        run1_name <- pair[1]
+        run2_name <- pair[2]
+
+        # print(run1_name)
+        # print(run2_name)
+        
+        # Filter the group_data based on the chosen filter_column
+        run1_data <- group_data %>% filter(!!sym(filter_column) == run1_name)
+        run2_data <- group_data %>% filter(!!sym(filter_column) == run2_name)
+
+        # print(run1_data)
+        # print(run2_data)
+
+        if (nrow(run1_data) == 0 || nrow(run2_data) == 0) {
+          message(glue("Skipping {run1_name} vs {run2_name}: missing data"))
+          message("run1_data:")
+          print(run1_data)
+          message("run2_data:")
+          print(run2_data)
+          return(data.frame(Model1 = run1_name, Model2 = run2_name))
+        }
+        
+        run1_reps <- list(replicates = unlist(run1_data[[metric_col]]))
+        run2_reps <- list(replicates = unlist(run2_data[[metric_col]]))
+        
+        if (length(run1_reps$replicates) == 0 || length(run2_reps$replicates) == 0) {
+          message(glue("Skipping {run1_name} vs {run2_name}: empty replicates"))
+          message("run1_reps:")
+          print(run1_reps)
+          message("run2_reps:")
+          print(run2_reps)
+          return(data.frame(Model1 = run1_name, Model2 = run2_name))
+        }
+
+        # message(glue("CV = {CV}"))
+        # message(glue("Split_trained = {Split_trained}"))
+        # message(glue("Split_eval = {Split_eval}"))
+        # message(glue("Diagnosis = {Diagnosis}"))
+        
+        # message("printing group_data")
+        # print(group_data)
+
+        # if "Integration" is not in the columns_to_group, assign it to NULL
+        CV  <- if ("CV" %in% columns_to_group) CV else NULL
+        Integration  <- if ("Integration" %in% columns_to_group) Integration else NULL
+        Features     <- if ("Features" %in% columns_to_group) Features else NULL
+        Model_type   <- if ("Model_type" %in% columns_to_group) Model_type else NULL
+        Split_trained <- if ("Split_trained" %in% columns_to_group) Split_trained else NULL
+        Split_eval <- if ("Split_eval" %in% columns_to_group) Split_eval else NULL
+        
+        comparison <- compare_metric_distributions(
+          to_compare = to_compare,
+          metric_boot1  = run1_reps,
+          metric_boot2  = run2_reps,
+          metric = metric,
+          run1_name  = run1_name,
+          run2_name  = run2_name,
+          Diagnosis  = Diagnosis,
+          CV         = CV,
+          Features   = Features,
+          Integration = Integration,
+          Model_type = Model_type,
+          Split_trained = Split_trained,
+          Split_eval = Split_eval,
+          save_plots = save_plots,
+          folder_name = folder_name
+        )
+        
+        # Extract stats
+        comp_stats <- comparison$comparative_statistics
+        comp_stats$Model1 <- run1_name
+        comp_stats$Model2 <- run2_name
+        
+        comp_stats %>%
+          as_tibble() %>%
+          mutate(Value = as.numeric(Value)) %>%
+          pivot_wider(names_from = Metric, values_from = Value)
+      })
+      
+    })) %>% 
+    select(-data) %>%
+    unnest(comparisons) %>%
+    ungroup() %>% 
+    apply_correct_multiple(correct_multiple = correct_multiple)
+}
+
+#-
+compare_metric_distributions <- function(to_compare, metric = "auc", metric_boot1, metric_boot2, run1_name = "Model_1", run2_name = "Model_2", folder_name = folder_name, Diagnosis = NULL, Integration = NULL, Model_type = NULL, Features = NULL, Split_trained = NULL, Split_eval = NULL, CV = NULL, bins = 100, save_plots = TRUE){
+
+  library(ggplot2)
+  library(tidyr)
+  library(dplyr)
+
+  # create folder if it doesn't exist
+  if(!dir.exists(folder_name)){dir.create(folder_name, showWarnings = FALSE)}
+  
+  metric_col <- if (metric == "auc") "AUC" else "R2"
+  # print("the function is running...")
+  # Prepare data for plotting
+  df <- data.frame(
+    metric_col = c(metric_boot1$replicates, metric_boot2$replicates),
+    Model = factor(c(rep(run1_name, length(metric_boot1$replicates)),
+                    rep(run2_name, length(metric_boot2$replicates))), levels = c(run1_name, run2_name))
+  ) %>% as_tibble()
+  
+    # Create histogram data to get max height for label positioning
+  hist_data <- ggplot_build(
+    ggplot(df, aes(x = metric_col)) +
+    geom_histogram(bins = bins)
+  )$data[[1]]
+  max_height <- max(hist_data$count) * 1.1  # 10% above max height
+  
+  # Calculate y-position for horizontal lines (middle of the plot)
+  mid_height <- max_height / 2
+
+  # Calculate comprehensive statistics
+  stats <- df %>%
+    group_by(Model) %>%
+    summarise(
+      mean_metric = mean(metric_col, na.rm = TRUE),
+      sd_metric = sd(metric_col, na.rm = TRUE),
+      median_metric = median(metric_col, na.rm = TRUE),
+      ci_lower = quantile(metric_col, 0.025, na.rm = TRUE),
+      ci_upper = quantile(metric_col, 0.975, na.rm = TRUE),
+      n_samples = n()
+    ) %>% 
+  mutate(label_x = ifelse(Model == levels(Model)[1], mean_metric - 0.02, mean_metric + 0.02)) %>% 
+  mutate(y_offset = ifelse(Model == levels(Model)[1], mid_height * 1.02, mid_height * 0.98))
+
+  
+  # Calculate direct p-value
+  direct_p_value <- mean(
+    map_dbl(metric_boot2$replicates, ~ mean(metric_boot1$replicates >= .x))
+  )
+
+  mean_diff  <- stats$mean_metric[2] - stats$mean_metric[1]
+  # Here every bootstrap from run1 is compared to every bootstrap from run2. So it counts how many times the AUC from run1 is greater than the AUC from run2 and then takes the mean of that, effectively calculating the p-value of the Null hypothesis that run1 is better than run2.
+
+
+  
+  # Calculate effect size (Cohen's d)
+  # pooled_sd <- sqrt((stats$sd_metric[1]^2 + stats$sd_metric[2]^2) / 2)
+  # cohens_d <- (stats$mean_metric[2] - stats$mean_metric[1]) / pooled_sd
+  
+  # print(df)
+  diagnosis_text <- if (!is.null(Diagnosis)) Diagnosis else ''
+  integration_text <- if (!is.null(Integration)) paste0(Integration, ' integration') else ''
+  cv_text <- if (!is.null(CV)) paste0('CV = ', CV) else ''
+  split_trained_text <- if (!is.null(Split_trained)) paste0('Split trained = ', Split_trained) else ''
+  split_eval_text <- if (!is.null(Split_eval)) paste0('Split eval = ', Split_eval) else ''
+  run2_name_text <- if (!is.null(run2_name)) paste0(run2_name, ' mean ', metric_col, ': ', format(stats$mean_metric[2], digits = 3)) else ''
+  run1_name_text <- if (!is.null(run1_name)) paste0(run1_name, ' mean ', metric_col, ': ', format(stats$mean_metric[1], digits = 3)) else ''
+  model_type_text <- if (!is.null(Model_type)) paste0('Model type = ', Model_type) else ''
+  features_text <- if (!is.null(Features)) Features else ''
+
+  subtitle_text <- glue("Test for {diagnosis_text} {model_type_text} {features_text} {integration_text} {cv_text} 
+          {split_trained_text} {split_eval_text} 
+          {run2_name_text} 
+          {run1_name_text} 
+          Mean difference: {format(mean_diff, digits = 3)} 
+          Empirical p-value: {format(direct_p_value, digits = 3, scientific = TRUE)} ({format(direct_p_value, digits = 3, scientific = FALSE)})")
+
+  
+  integration_filename  <- if (!is.null(Integration)) paste0(Integration, '_') else ''
+  CV_filename  <- if (!is.null(CV)) paste0(CV, '_') else ''
+  Split_trained_filename  <- if (!is.null(Split_trained)) paste0(Split_trained, '_') else ''
+  # Split_eval_filename  <- if (!is.null(Split_eval)) paste0(Split_eval) else ''
+  Split_eval_filename  <- if (!is.null(Split_eval) && Split_eval != "") paste0(Split_eval, '_') else ''
+  Model_type_filename  <- if (!is.null(Model_type) && Model_type != "") paste0(Model_type, '_') else ''
+
+  features_filename  <- if (!is.null(Features)) paste0(Features, '_') else ''
+
+  # message(glue("subtitle_text: {subtitle_text}"))
+  # message(glue("run2_name: {run2_name}"))
+  # message(glue("run1_name: {run1_name}"))
+  # message(glue("CV_filename: {CV_filename}"))
+  # message(glue("Split_trained_filename: {Split_trained_filename}"))
+  # message(glue("Split_eval_filename: {Split_eval_filename}"))
+  # message(glue("integration_filename: {integration_filename}"))
+  # message(glue("Diagnosis: {Diagnosis}"))
+
+  filename  <- glue("{metric_col}_comparison_{Diagnosis}_{Model_type_filename}{features_filename}{integration_filename}{run2_name}_vs_{run1_name}_{CV_filename}{Split_trained_filename}{Split_eval_filename}.png")
+  # strip the filename from the last "_" before the extension if there's any
+  filename  <- str_replace(filename, "_([^_]*)$", "\\1")
+  # message(glue("filename: {filename}"))
+    
+  # Create plot with histograms
+  # pdf(NULL)
+  p <- ggplot(df, aes(x = metric_col, fill = Model)) +
+    geom_histogram(alpha = 0.5, position = "identity", bins = bins) +
+    # Add vertical lines for means
+    geom_vline(data = stats, aes(xintercept = mean_metric, color = Model),
+               linetype = "dashed", linewidth = 1) +
+    # Add horizontal lines with mean and CI at mid-height
+    geom_segment(data = stats,
+                aes(x = ci_lower, xend = ci_upper,
+                    y = y_offset, yend = y_offset,
+                    color = Model),
+                linewidth = 2, alpha = 0.5) +
+    # Add point for mean on horizontal line
+    geom_point(data = stats,
+               aes(x = mean_metric, y = y_offset, color = Model),
+               size = 3) +
+    # Add mean labels with fixed y position
+    # geom_label(data = stats,
+    #           aes(x = mean_auc + c(-0.04, +0.04), y = mid_height + 3,
+    #               label = sprintf("Mean: %.3f", mean_auc), fill = Model),
+    #           color = "white", vjust = 0, hjust = -0.1, label.size = 0.25, linewidth = 4) +
+    # geom_text_repel(data = stats,
+    #             aes(x = mean_auc, y = mid_height + 3,
+    #                 label = sprintf("Mean: %.3f", mean_auc), fill = Model),
+    #             color = "white", box.padding = 0.35, point.padding = 0.5,
+    #             segment.color = "grey50", linewidth = 4, min.segment.length = 0.1) + 
+    geom_label_repel(
+      data = stats,
+      aes(
+        x = mean_metric, 
+        # y = mid_height + max_height * 0.05, # Position label slightly above mid-height
+        y = y_offset,
+        label = sprintf("Mean: %.3f", mean_metric),
+        fill = Model # Use fill to create colored boxes for each model
+      ),
+      color = "white", # Text color
+      box.padding = 0.35,
+      point.padding = 0.5,
+      segment.color = "grey50",
+      size = 4,
+      min.segment.length = 0.1,
+      label.size = 0.25, # Border thickness of the box
+      label.r = unit(0.2, "lines") # Rounded corners for the box
+    ) + 
+    scale_fill_manual(values = c(cbp1[1], cbp1[2]), guide = "none") +
+    scale_color_manual(values = c(cbp1[1], cbp1[2])) +
+    labs(x = glue("Mean {metric_col}"),
+         y = "Count",
+         title = glue("{Diagnosis} {model_type_text} {features_text} Testing H1:{run2_name} > {run1_name} "),
+         subtitle = subtitle_text) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    # Ensure labels are visible by extending y axis
+    coord_cartesian(clip = "off") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.2)))
+
+
+
+#   filename  <- glue("{metric_col}_comparison_{Diagnosis}_{run2_name}_vs_{run1_name}_{CV}_{Split_trained}_{Split_eval}.pdf")
+
+  if (save_plots == TRUE){
+    message("Saving plot to ", file.path(folder_name, filename))
+    # message("Saving plot to ", filename)
+
+    # Save plot to file in folder_name
+    # suppressMessages(
+    # ggsave(file.path(folder_name, filename), p, device = "png", width = 11, height = 8.5, units = "in")
+    ggsave(file.path(folder_name, filename), p + theme(plot.background = element_rect(fill = "white", color = NA)), device = "png", width = 11, height = 8.5, units = "in")
+
+    # )
+    # dev.off()
+  }
+
+  # Create summary statistics table
+  summary_stats <- data.frame(
+    Metric = c(
+      "Mean {metric_col}",
+      "Median {metric_col}",
+      "Standard Deviation",
+      "95% CI Lower",
+      "95% CI Upper",
+      "Number of Bootstraps"
+    ),
+    Model1 = format(c(
+      stats$mean_metric[1],
+      stats$median_metric[1],
+      stats$sd_metric[1],
+      stats$ci_lower[1],
+      stats$ci_upper[1],
+      stats$n_samples[1]
+    ), digits = 4),
+    Model2 = format(c(
+      stats$mean_metric[2],
+      stats$median_metric[2],
+      stats$sd_metric[2],
+      stats$ci_lower[2],
+      stats$ci_upper[2],
+      stats$n_samples[2]
+    ), digits = 4)
+  )
+  
+  names(summary_stats)[2:3] <- c(run1_name, run2_name)
+  
+  # Additional comparative statistics
+  comparative_stats <- tibble(
+    Metric = c(
+      "Mean_diff",
+      "p_value"
+    ),
+    Value = format(c(
+      stats$mean_metric[2] - stats$mean_metric[1],
+      direct_p_value
+    ), digits = 4)
+  ) %>% 
+      mutate(H0 = "Model 2 <= Model 1",
+      H1 = "Model 2 > Model 1")
+  
+  # Return all results
+  return(invisible(list(
+    plot = p,
+    summary_statistics = summary_stats,
+    comparative_statistics = comparative_stats,
+    raw_stats = stats
+  )))
+}
+
+
+
+
+set_comparison_parameters <- function(to_compare) {
+  # Here the convention is that the second model to compare is tested to see if it is better than the first model, i.e. Model2 > Model1
+  if (to_compare == "GLN_vs_bigstatsr") {
+    columns_to_group  <- c("Diagnosis", "CV", "Split_trained", "Split_eval")
+    runs_to_compare  <- list(c("bigstatsr_on_geno", "GLN_on_geno"))
+    runs_to_compare_list  <- c("bigstatsr_on_geno", "GLN_on_geno")
+  } else if (to_compare == "different_features_same_eval") {
+    columns_to_group  <- c("Diagnosis", "Model", "Integration", "Model_type", "CV", "Split_trained", "Split_eval")
+    runs_to_compare <- list(
+      c("GLN", "GLN+bigstatsr"),
+      c("PGS", "PGS+FGRS"),
+      c("FGRS", "PGS+FGRS"),
+      c("PGS+FGRS", "GLN+PGS+FGRS"),
+      c("GLN+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS")
+      # c("PGS+FGRS", "bigstatsr+PGS+FGRS"),
+      # c("bigstatsr+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS"),
+    )
+    # runs_to_compare_list  <- c("PGS", "PGS+FGRS", "GLN+PGS+FGRS", "bigstatsr+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS")
+    runs_to_compare_list  <- unlist(runs_to_compare)
+  } else if (to_compare == "DL_vs_Linear") {
+    columns_to_group  <- c("Diagnosis", "Features", "CV", "Split_trained", "Split_eval")
+    runs_to_compare <- list(
+      c("Linear", "DL")
+    )
+    runs_to_compare_list  <- c("Linear", "DL")
+  } else if (to_compare == "same_feature_same_model_different_eval") {
+    columns_to_group  <- c("Diagnosis", "Features", "CV", "Split_trained", "Model_type")
+    runs_to_compare <- list(
+      c("iPSYCH2", "test_iPSYCH1")
+    )
+    runs_to_compare_list  <- c("iPSYCH2", "test_iPSYCH1")
+  }
+  return(list(columns_to_group = columns_to_group, runs_to_compare = runs_to_compare, runs_to_compare_list = runs_to_compare_list))
+}
+
+
+#-
+process_statistical_tests <- function(
+    metrics_df,
+    emp_pvalues_df,
+    metric_name,
+    x_col,
+    fill_col,
+    columns_to_group,
+    nested_models = FALSE,
+    step_increase = 0.12,
+    keep_group_model_order = TRUE,
+    print = FALSE,
+    runs_to_compare = NULL,
+    fun_to_apply = "max"
+) {
+    # Construct column names based on metric
+    y_col <- paste0("avg_", metric_name)
+    lower_col <- paste0("lower_", metric_name)
+    upper_col <- paste0("upper_", metric_name)
+    add_combination  <- function(df){
+      if (nested_models == FALSE){
+        df %>% 
+          mutate(combination = paste(!!!syms(columns_to_group), sep = "_"))
+      } else {
+        df %>% 
+          mutate(combination = paste(Diagnosis, group1, group2, sep = "_"))
+      }
+    }
+
+    rename_groups  <- function(df){
+      if (keep_group_model_order == TRUE){
+        df %>% 
+          rename(group1 = Model1, group2 = Model2)
+      } else {
+        df %>% 
+          rename(group1 = Model2, group2 = Model1)
+      }
+    }
+
+    metrics_df  <- metrics_df %>% 
+        mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+    
+    # Create formula for t-test
+    my_formula <- as.formula(paste(y_col, "~", fill_col))
+    if (print == TRUE){print(my_formula)}
+    # 1. Create fake statistical test data
+    fake_stat_test <- metrics_df %>%
+            slice(rep(1:n(), each = 2)) %>%
+        # Add metrics for lower and upper bounds
+        mutate(
+            !!sym(y_col) := ifelse(row_number() %% 2 == 1, !!sym(lower_col), !!sym(upper_col))
+        )
+        # Replicate each row n times
+        # slice(rep(1:n(), each = n_replications)) %>%
+        # # Add random metrics (these could be parameterized if needed)
+        # mutate(
+        #     !!sym(y_col) := runif(n(), min = lower_roc_auc, max = upper_roc_auc)
+        #     # !!sym(paste0("std_", metric_name)) := runif(n(), min = 0.003, max = 0.02),
+        #     # !!sym(paste0("lower_", metric_name)) := runif(n(), min = 0.49, max = 0.55),
+        #     # !!sym(paste0("upper_", metric_name)) := runif(n(), min = 0.55, max = 0.61)
+        # )
+
+    
+    if (print == TRUE){
+      message("fake_stat_test")
+      print(fake_stat_test)}
+
+    fake_stat_test  <- fake_stat_test %>% 
+        # Group and perform t-test
+        group_by(!!!syms(columns_to_group)) %>%
+        rstatix::t_test(my_formula, comparisons = runs_to_compare) %>%
+        adjust_pvalue(method = "bonferroni") %>%
+        add_significance() %>%
+        add_combination() %>%
+        rename(p_value = p, p_value_bonf_diag = p.adj) %>%
+        mutate(p_value_bonf_diag = 1,
+        p_value_fdr_diag = 1,
+        p_value_bonf_all = 1,
+        p_value_fdr_all = 1,
+        sig = "ns",
+        sig_bonf_diag = "ns",
+        sig_bonf_all = "ns",
+        sig_fdr_diag = "ns",
+        sig_fdr_all = "ns") %>%
+        select(-c(n1, n2, statistic, df))
+
+    
+    if (print == TRUE){
+      message("fake_stat_test")
+      print(fake_stat_test)}
+    
+    if (print == TRUE){
+      message("emp_pvalues_df")
+      print(emp_pvalues_df)}
+    # 2. Process empirical p-values
+    processed_emp_pvalues <- emp_pvalues_df %>%
+        rename_groups() %>%
+        add_combination() %>%
+        select(!-any_of(colnames(fake_stat_test)))
+
+    if (print == TRUE){
+      message("processed_emp_pvalues")
+      print(processed_emp_pvalues)}
+    
+    # print(fake_stat_test)
+    # 3. Add x-y positions for plotting
+    fake_stat_test <- fake_stat_test %>% 
+        filter(combination %in% processed_emp_pvalues$combination) %>% 
+        add_xy_position(x = x_col, dodge = 0.8, step.increase = step_increase, fun = fun_to_apply)
+        # add_xy_position(fun = fun_to_apply, dodge = 0.8, step.increase = step_increase)
+
+    if (print == TRUE){
+      message("fake_stat_test")
+      print(fake_stat_test)}
+
+    # 4. Update fake stats with empirical p-values
+    new_stat_test <- fake_stat_test %>%
+        rows_update(processed_emp_pvalues, by = "combination", unmatched = "ignore")
+
+    if (print == TRUE){
+      message("new_stat_test")
+      print(new_stat_test)}
+    return(new_stat_test)
+}
+
+
+excel_filename  <- "eirpsy_tables.xlsx"
+# #-
+# eirpsy_theme <- theme_bw()+
+# theme(
+#   text = element_text(size=18, color = "black"),
+#   plot.title = element_text(size=18, hjust = 0.5, color = "black"),
+#   axis.text = element_text(color = "black"),
+#   axis.title = element_text(color = "black"),
+#   legend.text = element_text(color = "black"),
+#   legend.title = element_text(color = "black")
+# )
+# # set theme
+# theme_set(eirpsy_theme)
+
+eirpsy_theme  <- theme_bw() + 
+theme(
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(hjust = 0.5),
+  text=element_text(size=16),
+  panel.border = element_rect(linewidth = 1.5),
+  # center x label under the tick
+    # axis.text.x = element_text(hjust = 0.5),
+  axis.ticks.x = element_blank(),
+  # change all text color to black
+  axis.text = element_text(color = "black")
+  # axis.text.x = element_text(color = "black"),
+)
+
+# theme_set(eirpsy_theme)
+
+tocount  <- function(dataframe){
+  dataframe  %>% 
+  count(Model, GLN, Interaction, Label, Features, Features_set, CV) %>% 
+  print(n = Inf)
+}
+diagnoses <- c("ADHD", "ASD", "MDD", "SCZ", "BIP")
+
+fold_eir_vs_logreg  <- "04_EIR_vs_logreg_with_PGS_and_FGRS"
+
+cols_to_group  <- c("ID", "Model", "GLN", "Interaction", "Features", "Features_set", "Diagnosis", "True_Label", "CV", "Split_trained", "Split_eval")
+
+cols_to_select  <- c("ID", "Model","GLN","Interaction","Features","Features_set","Diagnosis","True_Label", "CV", "Split_trained", "Split_eval", "Score_Case_mean", "Score_Control_mean", "Score_Case_std", "Score_Control_std", "prevalence", "m_case")
+
+all_models  <- c(
+  "EIR: PGS",
+  "EIR: PGS + inter",
+  "EIR: PGS_FGRS",
+  "EIR: PGS_FGRS + inter",
+  "EIR: FGRS",
+  "EIR: FGRS + inter",
+  "EIR: GLN",
+  "EIR: GLN_FGRS",
+  "EIR: GLN_FGRS + inter",
+  "EIR: GLN_PGS",
+  "EIR: GLN_PGS + inter",
+  "EIR: GLN_PGS_FGRS",
+  "EIR: GLN_PGS_FGRS + inter",
+  "EIR: GLN_bigstatsr",
+  "EIR: GLN_bigstatsr + inter",
+  "EIR: GLN_bigstatsr_PGS",
+  "EIR: GLN_bigstatsr_PGS + inter",
+  # "EIR: GLN_bigstatsr_FGRS",
+  "EIR: GLN_bigstatsr_FGRS + inter",
+  "EIR: GLN_bigstatsr_PGS_FGRS",
+  "EIR: GLN_bigstatsr_PGS_FGRS + inter",
+  "EIR: bigstatsr",
+  "EIR: bigstatsr + inter",
+  "EIR: bigstatsr_PGS",
+  "EIR: bigstatsr_FGRS",
+  "EIR: bigstatsr_PGS + inter",
+  "EIR: bigstatsr_PGS_FGRS",
+  "EIR: bigstatsr_PGS_FGRS + inter",
+  "Logreg: FGRS",
+  "Logreg: GLN",
+  "Logreg: GLN_PGS",
+  "Logreg: GLN_PGS + inter",
+  "Logreg: GLN_PGS_FGRS",
+  "Logreg: GLN_PGS_FGRS + inter",
+  "Logreg: GLN_bigstatsr_PGS_FGRS",
+  "Logreg: GLN_bigstatsr_PGS_FGRS + inter",
+  "Logreg: GLN_bigstatsr",
+  "Logreg: GLN_bigstatsr + inter",
+  "Logreg: PGS",
+  "Logreg: PGS_FGRS",
+  "Logreg: PGS_FGRS + inter",
+  "Logreg: bigstatsr",
+  "Logreg: bigstatsr_PGS",
+  "Logreg: bigstatsr_PGS + inter",
+  "Logreg: bigstatsr_FGRS",
+  "Logreg: bigstatsr_FGRS + inter",
+  "Logreg: bigstatsr_PGS_FGRS",
+  "Logreg: bigstatsr_PGS_FGRS + inter",
+  "bigstatsr: bigstatsr"
+)
+
+# GLN_bigstatsr_FGRS missing as a run
+# fix bigstatsr position in Logreg
+
+
+all_labels  <- unique(str_extract(all_models, "(?<=: ).*")); all_labels
+all_labels  <- all_labels[!(!str_detect(all_labels, "_") & str_detect(all_labels, "inter"))]; all_labels
+
+all_labels_ordered <- c(
+  "GLN", "bigstatsr", "PGS", "FGRS",
+  "PGS_FGRS",
+  "GLN_FGRS", "GLN_FGRS + inter", 
+  "GLN_PGS", "GLN_PGS + inter", 
+  "GLN_bigstatsr", "GLN_bigstatsr + inter", 
+  "bigstatsr_PGS", "bigstatsr_PGS + inter",
+  "bigstatsr_FGRS", "bigstatsr_FGRS + inter",
+  "PGS_FGRS + inter",
+  "GLN_PGS_FGRS", "GLN_PGS_FGRS + inter",
+  "GLN_bigstatsr_PGS", "GLN_bigstatsr_PGS + inter", 
+  "GLN_bigstatsr_FGRS + inter", 
+  "GLN_bigstatsr_PGS_FGRS", "GLN_bigstatsr_PGS_FGRS + inter", 
+  "bigstatsr_PGS_FGRS", "bigstatsr_PGS_FGRS + inter"
+)
+
+all_labels_ordered <- list(
+  one = c("GLN", "bigstatsr", "PGS", "FGRS"),
+  two = c("PGS_FGRS", "PGS_FGRS + inter",
+  "GLN_FGRS", "GLN_FGRS + inter", 
+  "GLN_PGS", "GLN_PGS + inter", 
+  "GLN_bigstatsr", "GLN_bigstatsr + inter", 
+  "bigstatsr_PGS", "bigstatsr_PGS + inter",
+  "bigstatsr_FGRS", "bigstatsr_FGRS + inter"),
+
+  three_one_geno = c("GLN_PGS_FGRS", "GLN_PGS_FGRS + inter",
+    "bigstatsr_PGS_FGRS", "bigstatsr_PGS_FGRS + inter"),
+  three_two_geno = c("GLN_bigstatsr_PGS", "GLN_bigstatsr_PGS + inter", 
+  "GLN_bigstatsr_FGRS", "GLN_bigstatsr_FGRS + inter"),
+
+  four = c("GLN_bigstatsr_PGS_FGRS", "GLN_bigstatsr_PGS_FGRS + inter")
+
+)
+
+andrew_comp  <- c(all_labels_ordered[["one"]],   "GLN_bigstatsr", "GLN_bigstatsr + inter", all_labels_ordered[["three_one_geno"]], all_labels_ordered[["three_two_geno"]], all_labels_ordered[["four"]])
+# create dictionary style
+
+andrew_comp_loc <- andrew_comp[!andrew_comp %in% c("GLN_bigstatsr_PGS", "GLN_bigstatsr_FGRS", "GLN_bigstatsr_PGS + inter", "GLN_bigstatsr_FGRS + inter")]
+
+
+
+
+
+```
+
+## Hypertune AUCs
+```{r, eval = TRUE}
+# ----------------------------------
+# Hypertuning AUCs
+# ----------------------------------
+if (working_env == "genomedk"){
+  hypertuning_aucs  <- hypertune_preds_hypers %>% 
+  select(ID:Diagnosis, Hypercomb, Valid, all_of(hypers_changed)) %>% 
+  group_by(Diagnosis, Hypercomb, across(all_of(hypers_changed))) %>% 
+  roc_auc(True_Label, Score_Case, event_level = "second") %>% 
+  rename_with(~str_replace(., "_input_gln_config", ""), contains("_input_gln_config")) %>% 
+  rename(roc_auc = .estimate)
+  write_csv(hypertuning_aucs, file.path(current_dir, "data", "01_hyperparameter_tuning", "hypertuning_aucs.csv"))
+
+} else if(working_env == "local"){
+  hypertuning_aucs  <- read_csv(file.path("data", "hypertuning_aucs.csv"))
+}
+
+
+library(openxlsx)
+
+
+
+
+library(knitr)
+library(kableExtra)
+
+table_best_hypers  <- hypertuning_aucs %>% 
+group_by(Diagnosis) %>% 
+filter(roc_auc == max(roc_auc)) %>% 
+rename(AUROC = roc_auc) %>% 
+select(-.metric, -.estimator) %>%
+rename(Hypercomb_number = Hypercomb) %>% 
+ungroup()
+
+hypertuning_aucs %>% count(Hypercomb) %>% print(n=Inf)
+
+```
+
+## Hypertune Parallel coordinates plot
+
+```{r, eval = TRUE}
+# ----------------------------------
+# Parallel coordinate plot
+# ----------------------------------
+
+create_parallel_plot <- function(df, diagnosis, metric_name) {
+  plot <- df %>%
+    filter(.metric == metric_name) %>%
+    filter(Diagnosis == diagnosis) %>%
+    plot_ly(
+      type = 'parcoords',
+      line = list(color = ~roc_auc, colorscale = 'Viridis', showscale = TRUE),
+      dimensions = list(
+        list(range = range(df$kernel_width),
+             label = 'kernel_width', values = ~kernel_width),
+        list(range = range(df$channel_exp_base),
+             label = 'channel_exp_base', values = ~channel_exp_base),
+        list(range = range(df$rb_do),
+             label = 'rb_do', values = ~rb_do),
+        list(range = range(df$na_augment_perc),
+             label = 'na_augment_perc', values = ~na_augment_perc),
+        list(range = range(df$roc_auc),
+             label = metric_name, values = ~roc_auc)
+      )
+    ) %>%
+    layout(
+      title = glue("Hyperparameter tuning for {diagnosis}"),
+      font = list(family = "Arial", size = 12)
+    )
+  
+  # Display the plot
+  plot
+}
+
+#-
+create_parallel_plot <- function(df, diagnosis, column_name = "avg", color_scale = "Jet") {
+  
+  # Convert all relevant columns to factors and then to numeric sequences for plotting
+  df$kernel_width_cat <- as.numeric(as.factor(df$kernel_width))
+  df$channel_exp_base_cat <- as.numeric(as.factor(df$channel_exp_base))
+  df$rb_do <- as.numeric(as.factor(df$rb_do))
+  df$na_augment_perc <- as.numeric(as.factor(df$na_augment_perc))
+  
+  # Create mappings of the factor levels for labeling
+  kernel_width_levels <- levels(as.factor(df$kernel_width))
+  channel_exp_base_levels <- levels(as.factor(df$channel_exp_base))
+  rb_do_levels <- levels(as.factor(df$rb_do))
+  na_augment_perc_levels <- levels(as.factor(df$na_augment_perc))
+  
+  plot <- df %>%
+    plot_ly(
+      type = 'parcoords',
+      line = list(color = ~get(column_name), colorscale = color_scale, showscale = TRUE),
+      dimensions = list(
+        list(range = c(1, length(kernel_width_levels)),
+             tickvals = 1:length(kernel_width_levels),
+             ticktext = kernel_width_levels,
+             label = 'Kernel width', values = ~kernel_width_cat),
+        list(range = c(1, length(channel_exp_base_levels)),
+             tickvals = 1:length(channel_exp_base_levels),
+             ticktext = channel_exp_base_levels,
+             label = 'Channel exp base', values = ~channel_exp_base_cat),
+        list(range = c(1, length(rb_do_levels)),
+             tickvals = 1:length(rb_do_levels),
+             ticktext = rb_do_levels,
+             label = 'Residual Block Dropout', values = ~rb_do),
+        list(range = c(1, length(na_augment_perc_levels)),
+             tickvals = 1:length(na_augment_perc_levels),
+             ticktext = na_augment_perc_levels,
+             label = 'NA Augment Perc', values = ~na_augment_perc),
+        list(range = range(df$roc_auc),
+             label = 'AUROC', values = ~roc_auc)
+      )
+    ) %>%
+    plotly::layout(
+      title = glue("Hyperparameter tuning for {diagnosis}"),
+      font = list(family = "Arial", size = 18)
+    )
+
+  # Display the plot
+  plot
+}
+
+library(htmlwidgets)
+
+library(plotly)
+parallel_adhd  <- create_parallel_plot(hypertuning_aucs, "ADHD", "roc_auc")
+saveWidget(parallel_adhd, file.path(figs_path,"parallel_plot_adhd.html"))
+parallel_asd  <- create_parallel_plot(hypertuning_aucs, "ASD", "roc_auc")
+saveWidget(parallel_asd, file.path(figs_path,"parallel_plot_asd.html"))
+parallel_bip  <- create_parallel_plot(hypertuning_aucs, "BIP", "roc_auc")
+saveWidget(parallel_bip, file.path(figs_path,"parallel_plot_bip.html"))
+parallel_mdd  <- create_parallel_plot(hypertuning_aucs, "MDD", "roc_auc")
+saveWidget(parallel_mdd, file.path(figs_path,"parallel_plot_mdd.html"))
+parallel_scz  <- create_parallel_plot(hypertuning_aucs, "SCZ", "roc_auc")
+saveWidget(parallel_scz, file.path(figs_path,"parallel_plot_scz.html"))
+
+
+
+
+
+
+# add_sheet(excel_filename, sheetName = "Table S2", line = "Table S2: Best hyperparameter combinations of the EIR GLN models for ADHD, ASD, BIP, MDD, SCZ", 
+# table  = table_best_hypers)
+
+
+```
+
+## Hypertune pairwise relationship of hyperparameters vs ROC-AUC
+```{r, eval = TRUE}
+
+rename_df  <- tribble(
+  ~old, ~new,
+  "channel_exp_base", "Channel Exp Base",
+  "kernel_width", "Kernel Width",
+  "rb_do", "Residual Block Dropout",
+  "na_augment_perc", "NA Augment Perc",
+  "roc_auc", "AUROC"
+)
+
+hypertuning_aucs  <- hypertuning_aucs %>% 
+rename_with(~rename_df$new[match(., rename_df$old)], all_of(rename_df$old))
+
+# Create a named vector for mapping old names to new names
+hypers_changed_long <- c()
+for (hyper in hypers_changed_short) {
+  idx <- match(hyper, rename_df$old)
+  if (!is.na(idx)) {
+    hypers_changed_long <- c(hypers_changed_long, rename_df$new[idx])
+  } else {
+    hypers_changed_long <- c(hypers_changed_long, hyper)
+  }
+}
+
+
+p_ggduo_recon  <- ggduo(data = hypertuning_aucs, columnsX = hypers_changed_long, columnsY = c("AUROC"), types = list(continuous = "smooth_lm")
+      ) +
+  theme_bw()+
+  ggtitle(glue("Pairwise relationships between Hyperparameters and metrics"))+
+  theme(plot.title = element_text(hjust = 0.5),
+  # strip.background = element_rect(fill = "transparent"),
+  # strip.background = element_blank(),
+  axis.text.x = element_text(angle = 45, hjust = 1),
+  text = element_text(size = 20))+
+  
+  ; p_ggduo_recon
+
+
+hyper  <- "channel_exp_base"
+diagnosis  <- "SCZ"
+
+p_scatter <- ggplot(data = hypertuning_aucs %>% filter(Diagnosis == diagnosis), aes(x = !!sym(hyper), y = roc_auc)) +
+  geom_point(alpha = 0.7) + # Scatter points
+  geom_smooth(method = "lm", se = TRUE, color = "blue") + # Regression line
+  stat_poly_eq(
+    aes(label = paste(after_stat(eq.label), after_stat(p.value.label), sep = "~~~")),
+    formula = y ~ x, parse = TRUE,
+    color = "red"
+  ) +
+  theme_bw() +
+  ggtitle(glue("Relationship in {diagnosis} between {hyper} and ROC-AUC")) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    text = element_text(size = 20)
+  );p_scatter
+
+
+
+#-
+create_equations <- function(data, mapping, ...) {
+  # Get the x variable name using rlang
+  x_var <- as_name(mapping$x)
+  x_unique <- sort(unique(data[[x_var]]))
+  
+  ggplot(data = data, mapping = mapping) +
+    geom_point(alpha = 0.7) +
+    geom_smooth(method = "lm", se = TRUE, color = "blue") +
+    stat_poly_eq(
+      aes(label = paste(..eq.label.., ..p.value.label.., sep = "~~~")),
+      formula = y ~ x, parse = TRUE, color = "red"
+    ) +
+    scale_x_continuous(breaks = x_unique) +
+    facet_grid(Diagnosis ~ .)
+}
+
+
+p_pairwise_relationship <- ggduo(
+  data = hypertuning_aucs,
+  columnsX = hypers_changed_long,
+  columnsY = c("AUROC"),
+  types = list(continuous = create_equations)
+) +
+  ggtitle(glue("Pairwise relationships between each hyperparameter and AUROC")) +
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    text = element_text(size = 20)
+  );p_pairwise_relationship
+
+ggsave(file.path(figs_path, "FigS2_hyper_pairwise_relationships.pdf"), p_pairwise_relationship, width = 35, height = 35, units = "cm")
+
+
+
+
+hypertuning_aucs %>% 
+group_by(Diagnosis) %>%
+summarize(min_auc = min(roc_auc), max_auc = max(roc_auc))
+
+
+
+
+```
+
+
+# GLN 5-CV performances
+```{r, eval = TRUE}
+
+if(working_env == "genomedk"){
+  pres_gln_valids  <- readRDS(file.path(current_dir, "data", "02_GLN_vs_bigstatsr", "eir_GLNonly_preds_valid_5CV.rds"))
+
+
+  valids_aucs  <- pres_gln_valids %>% 
+  mutate(
+  Valid = as.factor(Valid),
+  True_Label = as.factor(True_Label)) %>% 
+  group_by(Diagnosis, Valid) %>% 
+  roc_auc(True_Label, Score_Case, event_level = "second")
+
+  write_csv(valids_aucs, file.path(current_dir, "data", "02_GLN_vs_bigstatsr", "valids_aucs.csv"))
+} else if(working_env == "local"){
+  message(glue("Working locally, reading file from {file.path('data', 'valids_aucs.csv')}"))
+  valids_aucs  <- read_csv(file.path("data", "valids_aucs.csv"))
+}
+
+
+p_valid_aucs  <- valids_aucs %>% 
+mutate(Valid = str_replace(Valid, "valid_", "")) %>%
+ggplot(., aes(x = Diagnosis, y = .estimate, fill = Diagnosis))+
+geom_boxplot()+
+# add jitter points with black circumference
+geom_point(aes(fill = Diagnosis), shape = 21, size = 3, color = "black", alpha = 1)+
+labs(y = "AUROC", x = "Diagnosis", title = "")+
+# scale_fill_manual(values = cbp1[c(2,3,1)], name = "SNP Set")+
+# scale_color_manual(values = cbp1[c(2,3,1)], name = "")+
+# theme_bw()+
+# remove legend of point
+guides(fill = guide_legend(override.aes = list(shape = NA)))+
+# geom_text(aes(label = Valid), size = 3, vjust = -0.2, hjust = -0.5)+
+stat_summary(fun = mean, geom = "text", aes(label = paste("Avg:", round(after_stat(y), 3))), vjust = -1, color = "black", size = 7)+
+# add horizontal dashed line at y = 0.5
+geom_hline(yintercept = 0.5, linetype = "dashed", color = "black", linewidth = 1.5)+
+my_theme; p_valid_aucs
+
+ggsave(file.path(figs_path, "FigS3_gln_valid_aucs.pdf"), p_valid_aucs, width = 35, height = 30, units = "cm")
+
+# add_sheet(excel_filename, sheetName = "Table S3", line = "Table S3: Classification performance of the EIR GLN models with best hyperparameters on 5 validation folds ADHD, ASD, BIP, MDD, SCZ", table =valids_aucs %>% 
+# mutate(Valid = str_replace(Valid, "valid_", "")) %>% 
+# rename(AUROC = .estimate) %>%
+# select(Diagnosis, Valid, AUROC))
+
+
+
+
+
+
+```
+
+# Format metrics_repl
+This dataframe contains the 10,000 bootstrapped AUROCs for each Diagnosis-Model-Feature-Split_eval combination apart from the ADHD one, since I made a mistake when I asked to export the data
+```{r}
+
+metrics_repl  <- readRDS(file.path(current_dir, "data", "metrics_full_gln_big_eir_logreg_sameboots.rds"))
+
+# Ugly but necessary reformatting
+
+
+metrics_repl  <- metrics_repl %>% 
+mutate(Split_trained = "train_valid") %>% 
+mutate(Features = case_when(
+  Model == "EIR" & Features == "genotype" ~ "GLN_on_geno",
+  TRUE ~ Features
+)) %>% 
+mutate(Features = case_when(
+  Model == "bigstatsr" & Features == "genotype" ~ "bigstatsr_on_geno",
+  TRUE ~ Features
+)) %>%
+mutate(Model_type = case_when(
+  Model == "EIR" ~ "DL",
+  Model %in% c("Logreg", "bigstatsr") ~ "Linear",
+  TRUE ~ NA_character_
+))  %>% 
+mutate(Split_eval = case_when(
+  Split_eval == "iPSYCH2015i" ~ "iPSYCH2",
+  Split_eval == "test" ~ "test_iPSYCH1",
+  TRUE ~ Split_eval
+)) %>% 
+mutate(Split_eval = fct_relevel(Split_eval, c("valid","test_iPSYCH1", "iPSYCH2"))) %>% 
+mutate(Model_genotype = case_when(
+  Model == "EIR" & Features == "GLN_on_geno" ~ "GLN",
+  Model == "bigstatsr" & Features == "bigstatsr_on_geno" ~ "bigstatsr",
+  TRUE ~ NA_character_
+)) %>% 
+mutate(Model_genotype = fct_relevel(Model_genotype, c("GLN", "bigstatsr"))) %>% 
+mutate(Features = case_when(
+Features == "GLN+PGS+FGRS+bigstatsr" ~ "GLN+bigstatsr+PGS+FGRS",
+TRUE ~ Features
+)) %>% 
+mutate(Features = case_when(
+Features == "GLN on geno" ~ "GLN_on_geno",
+Features == "bigstatsr on geno" ~ "bigstatsr_on_geno",
+TRUE ~ Features
+))
+
+
+# Select only the R2 computed from coef_to_liab(R2(x,y)) as in Florian's way
+metrics_repl  <- metrics_repl %>% 
+select(-contains("nag"), -contains("_ABC"), -ends_with("r2_lin")) %>% 
+select(-r2_lin_replicates) %>% 
+rename_with(~str_remove(., "_lin_liab_Florian"))
+
+
+# ----------------------------------
+# Formatting
+# ----------------------------------
+
+
+metrics_big_repl  <- metrics_repl %>% 
+filter(Features == "bigstatsr_on_geno") %>% 
+mutate(Features = "bigstatsr")  
+
+metrics_big_eir_repl  <- metrics_repl %>%
+filter(Features == "bigstatsr" & Interaction == "Inter")
+
+
+metrics_gln_repl  <- metrics_repl %>%
+filter(Features == "GLN_on_geno") %>% 
+mutate(Features = "GLN")
+
+metrics_gln_logreg_repl  <- metrics_repl %>% 
+filter(Features == "GLN" & Model == "Logreg" & CV == "5-CV")
+
+metrics_pgs_fgrs_eir_repl  <- metrics_repl %>% 
+filter(CV == "5-CV") %>% 
+filter(str_detect(Features, "PGS") | str_detect(Features, "FGRS")) %>% 
+filter(!str_detect(Features, "\\+")) %>%
+filter(Interaction == "Inter")
+
+# metrics_pgs_fgrs_eir %>% count_cols()
+metrics_pgs_fgrs_logreg_repl  <- metrics_repl %>% 
+filter(CV == "5-CV") %>% 
+filter(str_detect(Features, "PGS") | str_detect(Features, "FGRS")) %>% 
+filter(!str_detect(Features, "\\+")) %>%
+filter(Model_type == "Linear")
+
+# metrics_pgs_fgrs_logreg %>% count_cols()
+
+metrics_multiple_inter_repl  <- metrics_repl %>%
+filter(CV == "5-CV") %>% 
+filter(str_detect(Features, "\\+") & Interaction == "Inter")
+
+
+
+metrics_adhd_asd_mdd_inter_repl  <- metrics_repl %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("ADHD", "ASD", "MDD")) %>% 
+filter(Interaction == "Inter") %>% 
+# filter(!Features %in% c("GLN", "PGS", "FGRS")) %>% 
+filter(str_detect(Features, "\\+"))
+
+# For BIP and SCZ I want to keep only the models run without interaction because probably because of the small sample size, the additional term impacted negatively on the performance
+metrics_scz_bip_nointer_repl  <- metrics_repl %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("SCZ", "BIP")) %>% 
+filter(Interaction == "No-Inter" ) %>% 
+filter(str_detect(Features, "\\+"))
+
+
+metrics_scz_bip_nointer_repl_linear  <- metrics_repl %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("SCZ", "BIP")) %>% 
+filter(Interaction == "No-Inter" & Integration == "Linear") %>% 
+filter(str_detect(Features, "\\+"))
+
+metrics_scz_bip_nointer_repl_DL  <- metrics_repl %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("SCZ", "BIP")) %>% 
+filter(Interaction == "Inter" & Integration == "DL") %>% 
+filter(str_detect(Features, "\\+"))
+
+
+# metrics_multiple_inter_repl <- bind_rows(metrics_adhd_asd_mdd_inter_repl, metrics_scz_bip_nointer_repl)
+metrics_multiple_inter_repl <- bind_rows(metrics_adhd_asd_mdd_inter_repl, metrics_scz_bip_nointer_repl_linear, metrics_scz_bip_nointer_repl_DL)
+
+
+to_concatenate  <- c("Diagnosis", "Model", "Features", "Split_eval", "Interaction", "CV", "Split_trained")
+
+metrics_dl_vs_linear_repl  <- bind_rows(
+  metrics_big_repl,
+  # metrics_big_eir_repl,
+  metrics_gln_repl,
+  # metrics_gln_logreg_repl,
+  metrics_pgs_fgrs_eir_repl,
+  metrics_pgs_fgrs_logreg_repl,
+  metrics_multiple_inter_repl
+) %>% 
+filter_out_ADHD() %>% 
+mutate(Concatenated = paste(!!!syms(to_concatenate), sep = "_")) %>% 
+filter(Split_eval != "valid")
+# There are no duplicates
+
+
+```
+
+
+# Format metrics_avg
+```{r}
+
+metrics_avg  <- metrics_repl %>% 
+select(-contains("replicates")) %>% 
+select(-c(Model_type, Model_genotype)) %>% 
+pivot_longer(cols = -c(Diagnosis, Model,GLN, Interaction, Features, CV, Split_trained, Split_eval, Integration, Label), names_to = "metric", values_to = "estimate") %>% 
+select(Diagnosis, Model,GLN, Interaction, Features, CV, Split_trained, Split_eval, metric, estimate, Integration, Label)
+
+metrics_avg_orig  <- metrics_avg
+
+metrics_avg  <- metrics_avg %>% 
+mutate(Split_trained = "train_valid")
+
+metrics_avg %>% 
+filter(Model == "Logreg" & Features == "bigstatsr") %>% count_cols()
+# There are 4 but I don't need the last 2 and I will replace the first 2 with the ones from bigstatsr
+
+metrics_avg %>% 
+filter(Model == "bigstatsr") %>% count_cols()
+
+metrics_avg <- metrics_avg %>% 
+filter(!(Model == "Logreg" & Features == "bigstatsr")) %>% 
+# Convert "genotype" in EIR to GLN. This is to plot them
+mutate(Features = case_when(
+  Model == "EIR" & Features == "genotype" ~ "GLN_on_geno",
+  TRUE ~ Features
+)) %>% 
+mutate(Features = case_when(
+  Model == "bigstatsr" & Features == "genotype" ~ "bigstatsr_on_geno",
+  TRUE ~ Features
+)) %>%
+mutate(Model_type = case_when(
+  Model == "EIR" ~ "DL",
+  Model %in% c("Logreg", "bigstatsr") ~ "Linear",
+  TRUE ~ NA_character_
+))  %>% 
+mutate(Split_eval = case_when(
+  Split_eval == "iPSYCH2015i" ~ "iPSYCH2",
+  Split_eval == "test" ~ "test_iPSYCH1",
+  TRUE ~ Split_eval
+)) %>% 
+mutate(Split_eval = fct_relevel(Split_eval, c("valid","test_iPSYCH1", "iPSYCH2"))) %>% 
+mutate(Model_genotype = case_when(
+  Model == "EIR" & Features == "GLN_on_geno" ~ "GLN",
+  Model == "bigstatsr" & Features == "bigstatsr_on_geno" ~ "bigstatsr",
+  Model == "bigstatsr+PCs" & Features == "bigstatsr+PCs" ~ "bigstatsr+PCs",
+  Model == "bigstatsr+sex+age+PCs" & Features == "bigstatsr+sex+age+PCs" ~ "bigstatsr+sex+age+PCs",
+  TRUE ~ NA_character_
+)) %>% mutate(Model_genotype = fct_relevel(Model_genotype, c("GLN", "bigstatsr")))
+
+metrics_avg  <- metrics_avg %>% 
+  mutate(metric = case_when(
+    metric == "avg_auc" ~ "avg_roc_auc",
+    metric == "sd_auc" ~ "std_roc_auc",
+    metric == "sd_r2" ~ "std_r2",
+    metric == "lower_auc" ~ "lower_roc_auc",
+    metric == "upper_auc" ~ "upper_roc_auc",
+    TRUE ~ metric
+  ))
+
+```
+
+
+# P-values
+## p-values each model-feature iPSYCH2 - iPSYCH1 
+Compute the empirical p-values of the difference in performance between iPSYCH2 and iPSYCH1 for each Diagnosis-Model-Feature combination.
+
+```{r}
+
+# ----------------------------------
+# Same feature same model iPSYCH2 - iPSYCH1 difference
+# Question: Is the Model-Feature's performance in iPSYCH2 higher than in iPSYCH1?
+# ----------------------------------
+
+# I will need these for all the models
+
+to_compare <- "same_feature_same_model_different_eval"
+
+comparison_params <- set_comparison_parameters(to_compare)
+
+res_tabs_same_feature_same_model_different_eval <- metrics_dl_vs_linear_repl %>% 
+# select(GLN, Interaction) %>% 
+filter(Split_eval %in% c("test_iPSYCH1", "iPSYCH2"))
+date
+folder_name <- glue("emp_pvalues_{date}_{to_compare}")
+filename  <- "auc_pvalues_same_feature_same_model_different_eval.rds"
+# remove file if it exists
+# file.remove(file.path(current_dir, folder_name, filename))
+
+
+if(!file.exists(file.path(final_folder, folder_name, filename))){
+auc_pvalues_same_feature_same_model_different_eval_tabs <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = res_tabs_same_feature_same_model_different_eval  %>% filter(!Features %in% c("GLN","GLN_on_geno","bigstatsr","bigstatsr_on_geno")),
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Split_eval",
+  folder_name = folder_name
+); auc_pvalues_same_feature_same_model_different_eval_tabs
+
+auc_pvalues_same_feature_same_model_different_eval_gln_big <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = res_tabs_same_feature_same_model_different_eval %>% filter(Model_genotype %in% c("GLN", "bigstatsr")),
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Split_eval",
+  folder_name = folder_name
+); auc_pvalues_same_feature_same_model_different_eval_gln_big
+
+  auc_pvalues_same_feature_same_model_different_eval <- bind_rows(auc_pvalues_same_feature_same_model_different_eval_tabs, auc_pvalues_same_feature_same_model_different_eval_gln_big)
+  saveRDS(auc_pvalues_same_feature_same_model_different_eval, file.path(folder_name, filename))
+
+} else {
+  auc_pvalues_same_feature_same_model_different_eval <- readRDS(file.path(final_folder, folder_name, filename))
+}
+
+
+filename  <- "r2_pvalues_same_feature_same_model_different_eval.rds"
+
+if(!file.exists(file.path(final_folder, folder_name, filename))){
+  r2_pvalues_same_feature_same_model_different_eval_tabs <- compute_pvalues_comparisons(
+    to_compare = to_compare,
+    data = res_tabs_same_feature_same_model_different_eval  %>% filter(!Features %in% c("GLN","GLN_on_geno","bigstatsr","bigstatsr_on_geno")),
+    columns_to_group = comparison_params$columns_to_group,
+    runs_to_compare = comparison_params$runs_to_compare,
+    filter_column = "Split_eval",
+    metric = "r2",
+    save_plots = TRUE,
+    folder_name = folder_name
+  )
+
+  r2_pvalues_same_feature_same_model_different_eval_gln_big <- compute_pvalues_comparisons(
+    to_compare = to_compare,
+    data = res_tabs_same_feature_same_model_different_eval %>% filter(Model_genotype %in% c("GLN", "bigstatsr")),
+    columns_to_group = comparison_params$columns_to_group,
+    runs_to_compare = comparison_params$runs_to_compare,
+    filter_column = "Split_eval",
+    metric = "r2",
+    save_plots = TRUE,
+    folder_name = folder_name
+    )
+
+  r2_pvalues_same_feature_same_model_different_eval <- bind_rows(r2_pvalues_same_feature_same_model_different_eval_tabs, r2_pvalues_same_feature_same_model_different_eval_gln_big)
+
+  saveRDS(r2_pvalues_same_feature_same_model_different_eval, file.path(final_folder, folder_name, filename))
+} else {
+  r2_pvalues_same_feature_same_model_different_eval <- readRDS(file.path(final_folder, folder_name, filename))
+}
+
+```
+
+
+## p-values GLN vs bigstatsr on test iPSYCH1
+
+```{r}
+
+#-
+runs_compare_eir_vs_logreg  <- c(
+  "GLN_on_geno", 
+  "bigstatsr_on_geno", 
+  "GLN+bigstatsr",
+  "PGS", 
+  "FGRS", 
+  "PGS+FGRS",
+  "GLN+PGS+FGRS",
+  "bigstatsr+PGS+FGRS",
+  "GLN+bigstatsr+PGS+FGRS"
+)
+
+features_compare_gln_vs_big_test_repl  <- c(
+  "GLN_on_geno", 
+  "bigstatsr_on_geno"
+)
+
+labels_gln_big  <- c(
+  "EIR: genotype", 
+  "bigstatsr: genotype"
+)
+to_compare <- "GLN_vs_bigstatsr"
+
+comparison_params <- set_comparison_parameters(to_compare)
+columns_to_group <- comparison_params$columns_to_group
+runs_to_compare <- comparison_params$runs_to_compare
+runs_to_compare_list <- comparison_params$runs_to_compare_list
+
+
+folder_name <- file.path(final_folder, glue("emp_pvalues_{date}_{to_compare}"))
+filename  <- "auc_pvalues_gln_vs_bigstatsr_test.rds"
+# delete file if it exists
+# if (file.exists(file.path(current_dir, folder_name, filename))){file.remove(file.path(current_dir, folder_name, filename))}
+# file.remove(file.path(current_dir, folder_name, filename))
+if(!file.exists(file.path(folder_name, filename))){
+auc_pvalue_gln_vs_bigstatsr_test  <- compute_pvalues_comparisons(
+  data = metrics_repl %>%
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(Split_eval == "test_iPSYCH1") %>%
+          filter(CV == "5-CV") %>%
+          filter(Features %in% runs_to_compare[[1]]) %>%
+          mutate(Features = fct_relevel(Features, runs_to_compare[[1]])),
+  to_compare = to_compare,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = list(c("GLN_on_geno", "bigstatsr_on_geno")),
+  filter_column = "Features",
+  folder_name = folder_name
+); auc_pvalue_gln_vs_bigstatsr_test
+  saveRDS(auc_pvalue_gln_vs_bigstatsr_test, file.path(folder_name, filename))
+} else {
+  auc_pvalue_gln_vs_bigstatsr_test <- readRDS(file.path(folder_name, filename))
+}
+
+filename  <- "auc_pvalues_gln_vs_bigstatsr_iPSYCH2.rds"
+# file.remove(file.path(current_dir, folder_name, filename))
+if(!file.exists(file.path(folder_name, filename))){
+auc_pvalue_gln_vs_bigstatsr_iPSYCH2 <- compute_pvalues_comparisons(
+  data = metrics_repl %>%
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(Split_eval == "iPSYCH2") %>%
+          filter(CV == "5-CV") %>%
+          filter(Features %in% runs_to_compare[[1]]) %>%
+          mutate(Features = fct_relevel(Features, runs_to_compare[[1]])), 
+  to_compare = to_compare,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = runs_to_compare,
+  filter_column = "Features",
+  folder_name = folder_name
+); auc_pvalue_gln_vs_bigstatsr_iPSYCH2
+  saveRDS(auc_pvalue_gln_vs_bigstatsr_iPSYCH2, file.path(folder_name, filename))
+} else {
+  auc_pvalue_gln_vs_bigstatsr_iPSYCH2 <- readRDS(file.path(folder_name, filename))
+}
+
+
+auc_pvalues_gln_vs_bigstatsr <- bind_rows(auc_pvalue_gln_vs_bigstatsr_test, auc_pvalue_gln_vs_bigstatsr_iPSYCH2) %>% 
+mutate(
+            Model1 = str_replace(Model1, "_on_geno", ""),
+            Model2 = str_replace(Model2, "_on_geno", "")
+        )
+
+
+aucs_df_for_pvalues  <- metrics_avg %>% 
+filter(Features %in% features_compare_gln_vs_big_test_repl) %>% 
+    filter(Label %in% labels_gln_big) %>%
+    mutate(Label = fct_relevel(Label, labels_gln_big)) %>%
+    filter(metric %in% metrics_auc) %>%
+    pivot_wider(names_from = metric, values_from = estimate) %>%
+    filter_out_ADHD() %>%  
+    mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+
+
+#-
+# To convert the format of the p-values dataframe to one compatible with stat_pvalue_manual from ggpubr
+
+if(!file.exists(file.path(folder_name, "auc_formatted_pvalues_gln_vs_bigstatsr.rds"))){
+  auc_formatted_pvalues_gln_vs_bigstatsr <- process_statistical_tests(
+    metrics_df = aucs_df_for_pvalues,
+    emp_pvalues_df = auc_pvalues_gln_vs_bigstatsr,
+    metric_name = "auc",
+    x_col = "Diagnosis",
+    fill_col = "Model_genotype",
+    columns_to_group = c("Diagnosis", "Split_eval"),
+    keep_group_model_order = TRUE
+);auc_formatted_pvalues_gln_vs_bigstatsr %>% select(Diagnosis, Split_eval, group1, group2) %>% 
+arrange(Split_eval, Diagnosis,group1, group2)
+
+auc_formatted_pvalues_gln_vs_bigstatsr <- auc_formatted_pvalues_gln_vs_bigstatsr %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+saveRDS(auc_formatted_pvalues_gln_vs_bigstatsr, file.path(folder_name, "auc_formatted_pvalues_gln_vs_bigstatsr.rds"))
+} else {
+  auc_formatted_pvalues_gln_vs_bigstatsr <- readRDS(file.path(folder_name, "auc_formatted_pvalues_gln_vs_bigstatsr.rds"))
+}
+
+# ----------------------------------
+# Do the same for R2
+# ----------------------------------
+
+folder_name <- file.path(final_folder, glue("emp_pvalues_{date}_{to_compare}"))
+filename  <- "r2_pvalues_gln_vs_bigstatsr_test.rds"
+# file.remove(file.path(current_dir, folder_name, filename))
+if(!file.exists(file.path(folder_name, filename))){
+r2_pvalue_gln_vs_bigstatsr_test  <- compute_pvalues_comparisons(
+  data = metrics_repl %>%
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(Split_eval == "test_iPSYCH1") %>%
+          filter(CV == "5-CV") %>%
+          filter(Features %in% runs_to_compare[[1]]) %>%
+          mutate(Features = fct_relevel(Features, runs_to_compare[[1]])),
+  to_compare = to_compare,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = list(c("GLN_on_geno", "bigstatsr_on_geno")),
+  filter_column = "Features",
+  metric = "r2",
+  folder_name = folder_name
+); r2_pvalue_gln_vs_bigstatsr_test
+  saveRDS(r2_pvalue_gln_vs_bigstatsr_test, file.path(folder_name, filename))
+} else {
+  r2_pvalue_gln_vs_bigstatsr_test <- readRDS(file.path(folder_name, filename))
+}
+
+filename  <- "r2_pvalues_gln_vs_bigstatsr_iPSYCH2.rds"
+# file.remove(file.path(current_dir, folder_name, filename))
+if(!file.exists(file.path(folder_name, filename))){
+r2_pvalue_gln_vs_bigstatsr_iPSYCH2 <- compute_pvalues_comparisons(
+  data = metrics_repl %>%
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(Split_eval == "iPSYCH2") %>%
+          filter(CV == "5-CV") %>%
+          filter(Features %in% runs_to_compare[[1]]) %>%
+          mutate(Features = fct_relevel(Features, runs_to_compare[[1]])), 
+  to_compare = to_compare,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = runs_to_compare,
+  filter_column = "Features",
+  metric = "r2",
+  folder_name = folder_name
+); r2_pvalue_gln_vs_bigstatsr_iPSYCH2
+  saveRDS(r2_pvalue_gln_vs_bigstatsr_iPSYCH2, file.path(folder_name, filename))
+} else {
+  r2_pvalue_gln_vs_bigstatsr_iPSYCH2 <- readRDS(file.path(folder_name, filename))
+}
+
+
+r2_pvalues_gln_vs_bigstatsr <- bind_rows(r2_pvalue_gln_vs_bigstatsr_test, r2_pvalue_gln_vs_bigstatsr_iPSYCH2) %>% 
+mutate(
+            Model1 = str_replace(Model1, "_on_geno", ""),
+            Model2 = str_replace(Model2, "_on_geno", "")
+        )
+
+
+r2_df_for_pvalues  <- metrics_avg %>%  
+filter(Features %in% features_compare_gln_vs_big_test_repl) %>% 
+    filter(Label %in% labels_gln_big) %>%
+    mutate(Label = fct_relevel(Label, labels_gln_big)) %>%
+    filter(metric %in% metrics_r2) %>%
+    pivot_wider(names_from = metric, values_from = estimate) %>% 
+    filter_out_ADHD() %>%  
+    # filter(Diagnosis %in% c("ASD", "MDD", "SCZ", "BIP")) %>% 
+    mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+
+
+#-
+
+if(!file.exists(file.path(folder_name, "r2_formatted_pvalues_gln_vs_bigstatsr.rds"))){
+# To convert the format of the p-values dataframe to one compatible with stat_pvalue_manual from ggpubr
+  r2_formatted_pvalues_gln_vs_bigstatsr <- process_statistical_tests(
+      metrics_df = r2_df_for_pvalues,
+      emp_pvalues_df = r2_pvalues_gln_vs_bigstatsr,
+      metric_name = "r2",
+      x_col = "Diagnosis",
+      fill_col = "Model_genotype",
+      columns_to_group = c("Diagnosis", "Split_eval"),
+      keep_group_model_order = TRUE
+  )
+
+  r2_formatted_pvalues_gln_vs_bigstatsr <- r2_formatted_pvalues_gln_vs_bigstatsr %>% 
+  mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+  saveRDS(r2_formatted_pvalues_gln_vs_bigstatsr, file.path(folder_name, "r2_formatted_pvalues_gln_vs_bigstatsr.rds"))
+} else {
+  r2_formatted_pvalues_gln_vs_bigstatsr <- readRDS(file.path(folder_name, "r2_formatted_pvalues_gln_vs_bigstatsr.rds"))
+}
+
+
+
+
+```
+
+
+
+# Plot GLN vs bigstatsr on test_iPSYCH1 and iPSYCH2 + drop performance 14/02/25 11:23 works locally
+```{r}
+
+
+
+source("plotting_functions.R")
+
+#-
+bar_width <- 0.9  # Reduce bar width to add space between bars
+pvalue_size <- 8
+p_auc_gln_vs_big_test <- metrics_avg %>% 
+filter(Features %in% features_compare_gln_vs_big_test_repl) %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+filter_out_ADHD() %>% 
+plot_barplots_ggpubr(dataframe = .,
+  # to_plot = labels_gln_big,
+  x_column = "Diagnosis",
+  fill_column = "Model_genotype",
+  fill_label = "Model",
+  title = "",
+  x_title = "",
+  metrics = metrics_roc_auc,
+  y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Split_eval",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right",
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  pvalue_text_size = 12,
+  fill_colors = models_colors_palette,
+  theme = my_theme
+  # bar_width = bar_width
+)+
+
+geom_hline(yintercept = 0.5, linetype = "dashed", color = "black")+
+coord_cartesian(ylim = c(0.495, 0.66))+
+scale_y_continuous(breaks = c(seq(0.5, 1, by = 0.02)))+
+
+stat_pvalue_manual(
+  auc_formatted_pvalues_gln_vs_bigstatsr %>% 
+  mutate(y.position = case_when(
+  Diagnosis == "ADHD" & Split_eval == "test_iPSYCH1" ~ 0.645,
+  Diagnosis == "ASD" & Split_eval == "test_iPSYCH1" ~ 0.585,
+  Diagnosis == "BIP" & Split_eval == "test_iPSYCH1" ~ 0.60,
+  Diagnosis == "MDD" & Split_eval == "test_iPSYCH1" ~ 0.59,
+  Diagnosis == "SCZ" & Split_eval == "test_iPSYCH1" ~ 0.615,
+  Diagnosis == "ADHD" & Split_eval == "iPSYCH2" ~ 0.615,
+  Diagnosis == "ASD" & Split_eval == "iPSYCH2" ~ 0.575,
+  Diagnosis == "BIP" & Split_eval == "iPSYCH2" ~ 0.55,
+  Diagnosis == "MDD" & Split_eval == "iPSYCH2" ~ 0.56,
+  Diagnosis == "SCZ" & Split_eval == "iPSYCH2" ~ 0.565,
+  TRUE ~ y.position
+  )), label = "p.adj", tip.length = 0.01,
+  hide.ns = FALSE,
+  size = pvalue_size
+  )+
+  theme(plot.subtitle = element_text(size = 14));p_auc_gln_vs_big_test
+    # labs(subtitle = "test iPSYCH1 H1: AUROC bigstatsr > AUROC GLN,
+  # iPSYCH2 H1: AUROC GLN > AUROC bigstatsr")+
+
+
+
+p_r2_gln_vs_big_test <- metrics_avg %>% 
+filter(Features %in% features_compare_gln_vs_big_test_repl) %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+filter_out_ADHD() %>% 
+plot_barplots_ggpubr(dataframe = .,
+  # to_plot = labels_gln_big,
+  x_column = "Diagnosis",
+  fill_column = "Model_genotype",
+  fill_label = "Model",
+  title = "",
+  x_title = "",
+  metrics = metrics_r2,
+  y_title = "R2",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Split_eval",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right",
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  pvalue_text_size = 12,
+  fill_colors = models_colors_palette,
+  theme = my_theme
+  # bar_width = bar_width
+)+
+scale_y_continuous(limits = c(0, 0.06))+
+labs(fill = "Model")+
+stat_pvalue_manual(
+  r2_formatted_pvalues_gln_vs_bigstatsr, label = "p.adj", tip.length = 0.01,
+  hide.ns = FALSE,
+  size = pvalue_size
+  )+
+  # labs(subtitle = "test iPSYCH1 H1: AUROC bigstatsr > AUROC GLN,
+  # iPSYCH2 H1: AUROC GLN > AUROC bigstatsr")+
+    theme(
+    plot.subtitle = element_text(size = 14)
+  );p_r2_gln_vs_big_test
+
+
+# ggsave(glue("plots_paper_final/figs_{date}/auc_gln_vs_bigstatsr_testiPSYCH1.pdf"), p_auc_gln_vs_big_test)
+# ggsave(glue("plots_paper_final/figs_{date}/r2_gln_vs_bigstatsr_testiPSYCH1.pdf"), p_r2_gln_vs_big_test)
+
+
+
+
+```
+
+
+
+# Performance drop GLN vs bigstatsr iPSYCH2
+
+## P-values performance drop GLN vs bigstatsr iPSYCH2
+Here I compute 2 p-values:
+** Within-model p-value: is the performance of each model (GLN and bigstatsr) on test_iPSYCH1 higher than on iPSYCH2?, aka is the performance of each model (GLN and bigstatsr) on iPSYCH2 lower than on test_iPSYCH1?
+** Across-model p-value: is the drop in performance of GLN on iPSYCH2 smaller than the drop in performance of bigstatsr on iPSYCH2?
+
+```{r}
+
+# AUROC
+trial_metrics_avg <- metrics_avg %>% 
+  mutate(metric = case_when(
+    metric == "avg_auc" ~ "avg_roc_auc",
+    metric == "sd_auc" ~ "std_roc_auc",
+    metric == "sd_r2" ~ "std_r2",
+    metric == "lower_auc" ~ "lower_roc_auc",
+    metric == "upper_auc" ~ "upper_roc_auc",
+    TRUE ~ metric
+  ))
+
+# Calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the average values
+auc_drop_gln_big_repl <- calculate_performance_diff(
+  metrics_df = trial_metrics_avg %>% filter_out_ADHD(),
+  features_to_compare = features_compare_gln_vs_big_test_repl,
+  cols_to_remove = c("CV", "Label", "Model_type", "Split_trained"),
+  category_col = "Split_eval",
+  metrics_cols = metrics_roc_auc,
+  split1 = "test_iPSYCH1",
+  split2 = "iPSYCH2"
+) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+
+# Format the dataframe to calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the bootstrap replicates
+column_replicates <- "auc_replicates"
+auc_formatted_drop_gln_big_repl  <- metrics_repl %>%          
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(CV == "5-CV") %>%
+          filter(Features %in% runs_to_compare[[1]]) %>%
+          mutate(Features = fct_relevel(Features, runs_to_compare[[1]])) %>% 
+          mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+          select(Diagnosis, Features, Split_eval, Split_trained, CV, all_of(column_replicates)) %>% 
+          pivot_wider(names_from = Split_eval, values_from = all_of(column_replicates)) %>% 
+          mutate(!!sym(column_replicates) := map2(iPSYCH2, test_iPSYCH1, ~ .x - .y))
+
+# ----------------------------------
+# Within-model pvalues
+# ----------------------------------
+
+
+# Get the real p-values for the GLN and bigstatsr models
+auc_pvalues_gln_big_iPSYCH2_vs_iPSYCH1 <- auc_pvalues_same_feature_same_model_different_eval %>% 
+
+filter(Features %in% c("GLN","bigstatsr")) %>% 
+filter_out_ADHD()
+
+
+
+# Format the dataframe to be compatible with geom_text
+auc_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1  <- auc_drop_gln_big_repl %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+left_join(auc_pvalues_gln_big_iPSYCH2_vs_iPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+
+
+
+
+# ----------------------------------
+# R2
+# ----------------------------------
+r2_drop_gln_big_repl <- calculate_performance_diff(
+  metrics_df = trial_metrics_avg %>% filter_out_ADHD(),
+  features_to_compare = features_compare_gln_vs_big_test_repl,
+  cols_to_remove = c("CV", "Label", "Model_type", "Split_trained"),
+  category_col = "Split_eval",
+  metrics_cols = metrics_r2,
+  split1 = "test_iPSYCH1",
+  split2 = "iPSYCH2"
+) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+
+# Format the dataframe to calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the bootstrap replicates
+column_replicates <- "r2_replicates"
+r2_formatted_drop_gln_big_repl  <- metrics_repl %>%          
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(CV == "5-CV") %>%
+          filter(Features %in% runs_to_compare[[1]]) %>%
+          mutate(Features = fct_relevel(Features, runs_to_compare[[1]])) %>% 
+          mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+          select(Diagnosis, Features, Split_eval, Split_trained, CV, all_of(column_replicates)) %>% 
+          pivot_wider(names_from = Split_eval, values_from = all_of(column_replicates)) %>% 
+          mutate(!!sym(column_replicates) := map2(iPSYCH2, test_iPSYCH1, ~ .x - .y))
+
+# ----------------------------------
+# Within-model pvalues
+# ----------------------------------
+
+
+# Get the real p-values for the GLN and bigstatsr models
+r2_pvalues_gln_big_iPSYCH2_vs_iPSYCH1 <- r2_pvalues_same_feature_same_model_different_eval %>% 
+filter(Features %in% c("GLN","bigstatsr")) %>% 
+filter_out_ADHD()
+
+
+# Format the dataframe to be compatible with geom_text
+r2_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1  <- r2_drop_gln_big_repl %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+left_join(r2_pvalues_gln_big_iPSYCH2_vs_iPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+
+saveRDS(auc_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1, file.path(folder_name, "auc_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1.rds"))
+saveRDS(r2_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1, file.path(folder_name, "r2_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1.rds"))
+
+
+
+```
+## Plot performance drop GLN vs bigstatsr iPSYCH2
+```{r}
+
+auc_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1 <- readRDS(file.path(folder_name, "auc_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1.rds"))
+r2_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1 <- readRDS(file.path(folder_name, "r2_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1.rds"))
+
+
+# Barplot
+x_column <- "Diagnosis"
+y_column <- "diff_avg"
+fill_column <- "Model_genotype"
+metric_name <- "diff"
+bar_width  <- 0.65
+y_min  <- -0.05
+y_max  <- 0.12
+
+p_auc_perf_drop_gln_vs_big_iPSYCH2  <- ggbarplot(auc_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1, 
+  x = x_column, 
+  y = y_column, 
+  fill = fill_column, 
+  position = position_dodge(width = bar_width, preserve = "single"), 
+  width = bar_width, 
+  add = "", 
+  color = "black") +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    # subtitle = "Within-model p-value H1: performance on iPSYCH2 < performance on test_iPSYCH1",
+    y = bquote(Delta * AUROC ~ .(suffix_delta_eval)),
+    x = "",
+    fill = "Model"
+  ) +
+geom_errorbar(
+    aes(
+      ymin = !!sym(paste0("lower_", metric_name)),
+      ymax = !!sym(paste0("upper_", metric_name)),
+      group = interaction(!!sym(x_column), !!sym(fill_column))
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  # scale_y_continuous(breaks = seq(y_min, y_max, by = 0.01), limits = c(y_max, y_min)) +
+  # scale_y_reverse(breaks = seq(y_min, y_max, by = 0.01), limits = c(y_max, y_min)) +
+  scale_y_reverse(breaks = seq(y_min, y_max, by = 0.02)) +
+  my_theme +
+  theme(aspect.ratio = 1) +
+  scale_fill_manual(values = models_colors_palette) +
+
+    geom_text(
+    aes(
+      x = Diagnosis, 
+      y = upper_diff+0.004, 
+      # label = format(p_value, nsmall = 2, digits = 2, scientific = FALSE),
+      label = p.adj,
+      group = Model_genotype
+    ),
+    position = position_dodge(width = bar_width),
+    # vjust = -0.5, # Adjust vertical spacing
+    size = pvalue_size
+  ) +
+  # decrease text size of the subtitle
+  theme(
+    plot.subtitle = element_text(size = 14)
+  );p_auc_perf_drop_gln_vs_big_iPSYCH2
+
+
+
+x_column <- "Diagnosis"
+p_r2_perf_drop_gln_vs_big_iPSYCH2  <- ggbarplot(r2_perf_drop_gln_big_iPSYCH2_vs_iPSYCH1, 
+  x = x_column, 
+  y = y_column, 
+  fill = fill_column, 
+  position = position_dodge(width = bar_width, preserve = "single"), 
+  width = bar_width, 
+  add = "", 
+  color = "black") +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    # subtitle = "Within-model p-value H1: performance on iPSYCH2 < performance on test_iPSYCH1",
+    y = bquote(Delta * R^2 ~ .(suffix_delta_eval)),
+    x = "",
+    fill = "Model"
+  ) +
+geom_errorbar(
+    aes(
+      ymin = !!sym(paste0("lower_", metric_name)),
+      ymax = !!sym(paste0("upper_", metric_name)),
+      group = interaction(!!sym(x_column), !!sym(fill_column))
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  # scale_y_continuous(breaks = seq(y_min, y_max, by = 0.01), limits = c(y_max, y_min)) +
+  # scale_y_reverse(breaks = seq(y_min, y_max, by = 0.01), limits = c(y_max, y_min)) +
+  scale_y_reverse(breaks = seq(y_min, y_max, by = 0.01)) +
+  my_theme +
+  theme(aspect.ratio = 1) +
+  scale_fill_manual(values = models_colors_palette) +
+  theme(
+    plot.subtitle = element_text(size = 14)
+  ) + 
+
+    geom_text(
+    aes(
+      x = Diagnosis, 
+      y = upper_diff+0.003, 
+      # label = format(p_value, nsmall = 2, digits = 2, scientific = FALSE),
+      label = p.adj,
+      group = Model_genotype
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5, # Adjust vertical spacing
+    size = pvalue_size
+  );p_r2_perf_drop_gln_vs_big_iPSYCH2
+
+ggsave(glue("plots_paper_final/figs_{date}/p_auc_perf_drop_gln_vs_big_iPSYCH2.pdf"), p_auc_perf_drop_gln_vs_big_iPSYCH2)
+ggsave(glue("plots_paper_final/figs_{date}/p_r2_perf_drop_gln_vs_big_iPSYCH2.pdf"), p_r2_perf_drop_gln_vs_big_iPSYCH2)
+
+
+p_gln_big_auc_test  <- p_auc_gln_vs_big_test + theme(legend.position = "none") + p_auc_perf_drop_gln_vs_big_iPSYCH2 + plot_layout(guides = "collect") + plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(face = "bold"))
+
+
+p_gln_big_r2_test  <- p_r2_gln_vs_big_test + theme(legend.position = "none") + p_r2_perf_drop_gln_vs_big_iPSYCH2 + plot_layout(guides = "collect") + plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(face = "bold"))
+
+
+
+ggsave(file.path(figs_path,"Fig2_gln_big_auc_test_pvalues.pdf"), p_gln_big_auc_test, width = 70, height = 25, units = "cm")
+ggsave(file.path(figs_path,"FigS4_gln_big_r2_test_pvalues.pdf"), p_gln_big_r2_test, width = 70, height = 25, units = "cm")
+
+
+
+```
+
+
+# Tabs DL vs Linear on test + iPSYCH2
+## Format df
+```{r}
+
+# ----------------------------------
+# Preparing dataframe NOW 20/01/25 17:57 
+# ----------------------------------
+
+#-
+metrics_avg <- metrics_avg %>% 
+  mutate(metric = case_when(
+    metric == "avg_auc" ~ "avg_roc_auc",
+    metric == "sd_auc" ~ "std_roc_auc",
+    metric == "sd_r2" ~ "std_r2",
+    metric == "lower_auc" ~ "lower_roc_auc",
+    metric == "upper_auc" ~ "upper_roc_auc",
+    TRUE ~ metric
+  ))
+
+metrics_big  <- metrics_avg %>% 
+filter(Features == "bigstatsr_on_geno") %>% 
+mutate(Features = "bigstatsr")
+
+metrics_big_eir  <- metrics_avg %>%
+filter(Features == "bigstatsr" & Interaction == "Inter")
+
+
+metrics_gln  <- metrics_avg %>%
+filter(Features == "GLN_on_geno") %>% 
+mutate(Features = "GLN")
+
+metrics_gln_logreg  <- metrics_avg %>% 
+filter(Features == "GLN" & Model == "Logreg" & CV == "5-CV")
+
+metrics_pgs_fgrs_eir  <- metrics_avg %>% 
+filter(CV == "5-CV") %>% 
+filter(str_detect(Features, "PGS") | str_detect(Features, "FGRS")) %>% 
+filter(!str_detect(Features, "\\+")) %>%
+filter(Interaction == "Inter")
+
+# metrics_pgs_fgrs_eir %>% count_cols()
+
+metrics_pgs_fgrs_logreg  <- metrics_avg %>% 
+filter(CV == "5-CV") %>% 
+filter(str_detect(Features, "PGS") | str_detect(Features, "FGRS")) %>% 
+filter(!str_detect(Features, "\\+")) %>%
+filter(Model_type == "Linear")
+
+# metrics_pgs_fgrs_logreg %>% count_cols()
+
+metrics_multiple_inter  <- metrics_avg %>%
+filter(CV == "5-CV") %>% 
+filter(str_detect(Features, "\\+") & Interaction == "Inter")
+
+
+metrics_adhd_asd_mdd_inter  <- metrics_avg %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("ADHD", "ASD", "MDD")) %>% 
+filter(Interaction == "Inter") %>% 
+filter(str_detect(Features, "\\+"))
+
+# For BIP and SCZ I want to keep only the models run without interaction because probably because of the small sample size, the additional term impacted negatively on the performance
+metrics_scz_bip_nointer  <- metrics_avg %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("SCZ", "BIP")) %>% 
+filter(Interaction == "No-Inter") %>% 
+filter(str_detect(Features, "\\+"))
+
+metrics_scz_bip_nointer_linear  <- metrics_avg %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("SCZ", "BIP")) %>% 
+filter(Interaction == "No-Inter" & Model_type == "Linear") %>% 
+filter(str_detect(Features, "\\+"))
+
+
+
+metrics_scz_bip_nointer_DL  <- metrics_avg %>%
+filter(CV == "5-CV") %>% 
+filter(Diagnosis %in% c("SCZ", "BIP")) %>% 
+filter(Interaction == "Inter" & Model_type == "DL") %>% 
+filter(str_detect(Features, "\\+"))
+
+metrics_scz_bip_nointer_DL %>% count(Features)
+metrics_scz_bip_nointer_linear %>% count(Features)
+metrics_adhd_asd_mdd_inter %>% count(Features)
+
+
+# metrics_multiple_inter <- bind_rows(metrics_adhd_asd_mdd_inter, metrics_scz_bip_nointer)
+# metrics_multiple_inter_repl <- bind_rows(metrics_adhd_asd_mdd_inter_repl, metrics_scz_bip_nointer_repl)
+metrics_multiple_inter <- bind_rows(metrics_adhd_asd_mdd_inter, metrics_scz_bip_nointer_linear, metrics_scz_bip_nointer_DL)
+
+
+metrics_adhd_asd_mdd_inter %>% count(Diagnosis, Model_type, Interaction)
+metrics_scz_bip_nointer_linear %>% count(Diagnosis, Model_type, Interaction)
+metrics_scz_bip_nointer_DL %>% count(Diagnosis, Model_type, Interaction)
+metrics_multiple_inter %>% count(Diagnosis, Model_type, Interaction)
+
+metrics_adhd_asd_mdd_inter %>% count(Diagnosis, Model_type, Model, Features)
+metrics_scz_bip_nointer_linear %>% count(Diagnosis, Model_type, Model, Features)
+metrics_scz_bip_nointer_DL %>% count(Diagnosis, Model_type, Model, Features)
+metrics_multiple_inter %>% count(Diagnosis, Model_type, Model, Features)
+
+
+metrics_dl_vs_linear_avg  <- bind_rows(
+  metrics_big,
+  # metrics_big_eir,
+  metrics_gln,
+  # metrics_gln_logreg,
+  metrics_pgs_fgrs_eir,
+  metrics_pgs_fgrs_logreg,
+  metrics_multiple_inter
+) %>% 
+filter_out_ADHD() %>% 
+distinct()
+
+
+```
+
+
+## P-values nested models (different features) in same Integration (DL or Linear) on test_iPSYCH1 and iPSYCH2
+Question: does integrating GLN+bigstatsr improve the performance of the model compared to them singularly?
+Question: does adding PGS to FGRS improve the performance of the model?
+Question: does adding GLN or bigstatsr to PGS+FGRS improve the performance of the model?
+
+### test_iPSYCH1
+```{r}
+
+features_dl_vs_linear  <- c(
+  "GLN", 
+  "bigstatsr", 
+  "GLN+bigstatsr",
+  "PGS", 
+  "FGRS", 
+  "PGS+FGRS",
+  "GLN+PGS+FGRS",
+  "bigstatsr+PGS+FGRS",
+  "GLN+bigstatsr+PGS+FGRS"
+)
+
+# Because of the damn ggpubr, here I need to re-compute only the p-values I wanna show on the plot, otherwise the position of the y is messed up.
+to_compare <- "different_features_same_eval"
+comparison_params <- set_comparison_parameters(to_compare)
+
+nested_models_test_iPSYCH1_toplot <- metrics_dl_vs_linear_repl %>%  
+filter_out_ADHD() %>% 
+filter(Split_eval == "test_iPSYCH1") %>%
+filter(Features %in% comparison_params$runs_to_compare_list) %>% 
+filter(Integration == "Linear" | (Integration == "DL" & Model_genotype == "GLN"))
+
+
+# Here I had to remove specific comparisons because they are DIagnosis specific
+
+folder_name <- file.path(final_folder, glue("emp_pvalues_{date}_{to_compare}"))
+filename  <- "auc_pvalues_nested_models_test_iPSYCH1_toplot"
+# file.remove(file.path(current_dir, folder_name, filename))
+if (!file.exists(file.path(folder_name, filename))) {
+auc_pvalues_nested_models_test_iPSYCH1_toplot_linear <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = nested_models_test_iPSYCH1_toplot %>% mutate(Model = "Linear", Integration = "Linear", Model_type = "Linear"),
+  # columns_to_group = comparison_params$columns_to_group,
+  columns_to_group = c("Diagnosis", "Model", "Model_type","CV","Split_trained","Split_eval"),
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Features",
+  save_plots = TRUE,
+  folder_name = folder_name,
+  correct_multiple = FALSE
+) %>% 
+filter(!(Diagnosis == "ADHD" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "ASD" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "BIP" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "MDD" & Model1 == "FGRS")) %>%
+filter(!(Diagnosis == "SCZ" & Model1 == "FGRS"))  %>% 
+apply_correct_multiple(., correct_multiple = TRUE); auc_pvalues_nested_models_test_iPSYCH1_toplot_linear
+
+saveRDS(auc_pvalues_nested_models_test_iPSYCH1_toplot_linear, file.path(folder_name, filename))
+} else {
+auc_pvalues_nested_models_test_iPSYCH1_toplot_linear <- readRDS(file.path(folder_name, filename))
+}
+
+
+
+metrics_linear_test  <- metrics_dl_vs_linear_avg %>% 
+filter(Split_eval == "test_iPSYCH1") %>% 
+filter(Features %in% features_dl_vs_linear) %>%
+mutate(Features = fct_relevel(Features, features_dl_vs_linear)) %>% 
+filter(Model_type == "Linear" | (Model_type == "DL" & Model_genotype == "GLN"))
+
+
+
+
+# ----------------------------------
+# R2 p-values
+# ----------------------------------
+filename  <- file.path("r2_pvalues_nested_models_test_iPSYCH1_toplot")
+# file.remove(file.path(current_dir, folder_name, filename))
+if (!file.exists(file.path(folder_name, filename))) {
+r2_pvalues_nested_models_test_iPSYCH1_toplot_linear <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = nested_models_test_iPSYCH1_toplot %>% mutate(Model = "Linear", Integration = "Linear", Model_type = "Linear"),
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Features",
+  metric = "r2",
+  folder_name = folder_name,
+  correct_multiple = FALSE
+) %>% 
+filter(!(Diagnosis == "ADHD" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "ASD" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "BIP" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "MDD" & Model1 == "FGRS")) %>%
+filter(!(Diagnosis == "SCZ" & Model1 == "FGRS"))  %>% 
+apply_correct_multiple(., correct_multiple = TRUE); r2_pvalues_nested_models_test_iPSYCH1_toplot_linear
+saveRDS(r2_pvalues_nested_models_test_iPSYCH1_toplot_linear, file.path(folder_name, filename))
+} else {
+r2_pvalues_nested_models_test_iPSYCH1_toplot_linear <- readRDS(file.path(folder_name, filename))
+}
+
+
+```
+
+### iPSYCH2
+```{r}
+
+to_compare <- "different_features_same_eval"
+comparison_params <- set_comparison_parameters(to_compare)
+
+nested_models_iPSYCH2_toplot <- metrics_dl_vs_linear_repl %>%  
+filter_out_ADHD() %>% 
+filter(Split_eval == "iPSYCH2") %>%
+filter(Features %in% comparison_params$runs_to_compare_list) %>% 
+filter(Integration == "Linear" | (Integration == "DL" & Model_genotype == "GLN"))
+
+
+folder_name <- file.path(final_folder, glue("emp_pvalues_{date}_{to_compare}"))
+filename  <- "auc_pvalues_nested_models_iPSYCH2_toplot_linear"
+# file.remove(file.path(current_dir, folder_name, filename))
+if (!file.exists(file.path(folder_name, filename))) {
+auc_pvalues_nested_models_iPSYCH2_toplot_linear <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = nested_models_iPSYCH2_toplot %>% mutate(Model = "Linear", Integration = "Linear", Model_type = "Linear"),
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Features",
+  save_plots = TRUE,
+  folder_name = folder_name
+) %>% 
+filter(!(Diagnosis == "ADHD" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "ASD" & Model1 == "PGS")) %>% 
+filter(!(Diagnosis == "BIP" & Model1 == "FGRS")) %>% 
+filter(!(Diagnosis == "MDD" & Model1 == "FGRS")) %>%
+filter(!(Diagnosis == "SCZ" & Model1 == "FGRS"))  %>% 
+apply_correct_multiple(., correct_multiple = TRUE); auc_pvalues_nested_models_iPSYCH2_toplot_linear
+saveRDS(auc_pvalues_nested_models_iPSYCH2_toplot_linear, file.path(folder_name, filename))
+} else {
+auc_pvalues_nested_models_iPSYCH2_toplot_linear <- readRDS(file.path(folder_name, filename))
+}
+
+
+metrics_linear_iPSYCH2  <- metrics_dl_vs_linear_avg %>% 
+filter(Split_eval == "iPSYCH2") %>% 
+filter(Features %in% features_dl_vs_linear) %>%
+mutate(Features = fct_relevel(Features, features_dl_vs_linear)) %>% 
+filter(Model_type == "Linear" | (Model_type == "DL" & Model_genotype == "GLN"))
+
+
+
+
+# ----------------------------------
+# R2 p-values
+# ----------------------------------
+filename  <- "r2_pvalues_nested_models_iPSYCH2_toplot_linear"
+# file.remove(file.path(current_dir, folder_name, filename))
+if (!file.exists(file.path(folder_name, filename))) {
+r2_pvalues_nested_models_iPSYCH2_toplot_linear <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = nested_models_iPSYCH2_toplot %>% mutate(Model = "Linear", Integration = "Linear", Model_type = "Linear") ,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Features",
+  metric = "r2",
+  folder_name = folder_name
+); r2_pvalues_nested_models_iPSYCH2_toplot_linear
+saveRDS(r2_pvalues_nested_models_iPSYCH2_toplot_linear, file.path(folder_name, filename))
+} else {
+r2_pvalues_nested_models_iPSYCH2_toplot_linear <- readRDS(file.path(folder_name, filename))
+}
+
+
+
+```
+
+## P-values same features DL vs Linear test_iPSYCH1
+Question: is the performance of the DL integration on the models GLN+bigstatsr, GLN+PGS+FGRS, GLN+bigstatsr+PGS+FGRS higher than the performance of the Linear integration on the same models?
+```{r}
+to_compare <- "DL_vs_Linear"
+
+comparison_params <- set_comparison_parameters(to_compare)
+
+trial_res_tabs_DL_vs_Linear <- metrics_dl_vs_linear_repl %>% 
+filter_out_ADHD() %>% 
+# select(GLN, Interaction) %>% 
+# filter_out_ADHD() %>% 
+# filter(Diagnosis %in% c("ASD")) %>%
+  filter(Split_eval == "test_iPSYCH1") %>%
+  filter(Integration %in% comparison_params$runs_to_compare_list) %>% 
+  filter(Features %in% c("GLN+bigstatsr", "GLN+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS"))
+
+folder_name <- file.path(final_folder, glue("emp_pvalues_{date}_{to_compare}"))
+filename  <- "auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1"
+# file.remove(file.path(current_dir, folder_name, filename))
+if (!file.exists(file.path(folder_name, filename))) {
+auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1 <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = trial_res_tabs_DL_vs_Linear,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Integration",
+  folder_name = folder_name
+); auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1
+saveRDS(auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1, file.path(folder_name, filename))
+} else {
+auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1 <- readRDS(file.path(folder_name, filename))
+}
+
+filename  <- "r2_pvalues_tabs_DL_vs_Linear"
+# file.remove(file.path(current_dir, folder_name, filename))
+if (!file.exists(file.path(folder_name, filename))) {
+r2_pvalues_tabs_DL_vs_Linear <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = trial_res_tabs_DL_vs_Linear ,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Integration",
+  metric = "r2",
+  folder_name = folder_name
+); r2_pvalues_tabs_DL_vs_Linear
+saveRDS(r2_pvalues_tabs_DL_vs_Linear, file.path(folder_name, filename))
+} else {
+r2_pvalues_tabs_DL_vs_Linear <- readRDS(file.path(folder_name, filename))
+}
+
+
+```
+
+
+## Plot AUC tabs Linear test_iPSYCH1
+
+```{r}
+
+
+#-
+auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear <- process_statistical_tests(
+  metrics_df = metrics_linear_test %>% metrics_to_wide(metrics_auroc),
+  emp_pvalues_df = auc_pvalues_nested_models_test_iPSYCH1_toplot_linear,
+  metric_name = "roc_auc",
+  x_col = "Features", # HERE IT'S IMPORTANT THAT IT'S THE SAAAAAME
+  fill_col = "Features",
+  columns_to_group = c("Diagnosis", "Split_eval"),
+  nested_models = TRUE,
+  step_increase = 0.02,
+  keep_group_model_order = TRUE,
+  print = FALSE,
+  runs_to_compare = NULL,
+  fun_to_apply = "mean_se"
+) %>% 
+select(-contains("sig")) %>% 
+rename(p.adj = p_value_fdr_all) %>% 
+add_significance("p.adj") %>% 
+mutate(p_fdr = ifelse(p.adj.signif == "ns", "ns", round(p.adj, 3)))
+
+saveRDS(auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear, file.path(final_folder, "auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+saveRDS(metrics_linear_test, file.path(final_folder, "metrics_linear_test.rds"))
+
+#-
+auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear  <- readRDS(file.path(final_folder, "auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+metrics_linear_test  <- readRDS(file.path(final_folder, "metrics_linear_test.rds"))
+
+
+p_auc_tabs_linear_test  <- plot_barplots_ggpubr(dataframe = metrics_linear_test,
+  x_column = "Features",
+  fill_column = "Features",
+  fill_label = "Features",
+  title = "",
+  x_title = "",
+  metrics = metrics_auroc,
+  y_title = "AUROC",
+  # metrics = metrics_auroc,
+  # y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Diagnosis",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right", # Remove legend by setting position to "none"
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  # pvalue_size = 9,
+  fill_colors = features_colors_palette,
+  # padding = -0.001
+  padding = 0,
+  bar_width = 0.9,
+  theme = my_theme
+  # expand = c(0, 0)
+) + 
+# add horizontal dashed line at 0.5
+geom_hline(yintercept = 0.5, linetype = "dashed", color = "black")+
+# theme(aspect.ratio = 1)+
+theme(axis.text.x = element_text(hjust = 0.5, vjust = 0.5)) +
+# theme(axis.ticks.x = element_line()) +
+theme(strip.background = element_blank()) +
+# rotate 90 degrees
+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+scale_y_continuous(breaks = seq(0.5, 0.77, by = 0.1), limits = c(0, 0.77), expand = c(0, 0))+
+coord_cartesian(ylim = c(0.495, 0.74))+
+scale_y_continuous(breaks = c(seq(0.5, 1, by = 0.05)))+
+stat_pvalue_manual(
+auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear %>% 
+mutate(y.position = 
+case_when(
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr" ~ 0.65,
+  Diagnosis == "ADHD" & group2 == "PGS+FGRS" ~ 0.66,
+  Diagnosis == "ADHD" & group2 == "GLN+PGS+FGRS" ~ 0.705,
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.72,
+
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr" ~ 0.59,
+  Diagnosis == "ASD" & group2 == "PGS+FGRS" ~ 0.61,
+  Diagnosis == "ASD" & group2 == "GLN+PGS+FGRS" ~ 0.63,
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.645,
+
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr" ~ 0.60,
+  Diagnosis == "BIP" & group2 == "PGS+FGRS" ~ 0.71,
+  Diagnosis == "BIP" & group2 == "GLN+PGS+FGRS" ~ 0.72,
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.73,
+
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr" ~ 0.61,
+  Diagnosis == "MDD" & group2 == "PGS+FGRS" ~ 0.66,
+  Diagnosis == "MDD" & group2 == "GLN+PGS+FGRS" ~ 0.67,
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.68,
+
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr" ~ 0.62,
+  Diagnosis == "SCZ" & group2 == "PGS+FGRS" ~ 0.675,
+  Diagnosis == "SCZ" & group2 == "GLN+PGS+FGRS" ~ 0.68,
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.69,
+  TRUE ~ y.position
+)
+),
+label = "p_fdr", 
+tip.length = 0.01, 
+size = pvalue_size_fig3)+
+# remove legend
+theme(legend.position = "none"); p_auc_tabs_linear_test
+# hide.ns = TRUE);p_auc_tabs_linear_test
+# hide.ns = "p.adj");p_auc_tabs_linear_test
+
+ggsave(file.path(figs_path, "auc_tabs_linear_testiPSYCH1.pdf"), print(p_auc_tabs_linear_test), width = 70, height = 25, units = "cm")
+
+# TODO: 16/02/25 16:13 this works
+
+
+
+```
+## Plot R2 tabs Linear test_iPSYCH1
+```{r}
+
+#-
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear <- process_statistical_tests(
+  metrics_df = metrics_linear_test %>% metrics_to_wide(metrics_r2),
+  emp_pvalues_df = r2_pvalues_nested_models_test_iPSYCH1_toplot_linear,
+  metric_name = "r2",
+  x_col = "Features", # HERE IT'S IMPORTANT THAT IT'S THE SAAAAAME
+  fill_col = "Features",
+  columns_to_group = c("Diagnosis", "Split_eval"),
+  nested_models = TRUE,
+  step_increase = 0.12,
+  keep_group_model_order = TRUE,
+  print = TRUE,
+  runs_to_compare = NULL,
+  fun_to_apply = "mean"
+) %>% 
+select(-contains("sig")) %>% 
+rename(p.adj = p_value_fdr_all) %>% 
+add_significance("p.adj") %>% 
+mutate(p_fdr = ifelse(p.adj.signif == "ns", "ns", round(p.adj, 3)))
+
+
+saveRDS(r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear, file.path(final_folder, "r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+saveRDS(metrics_linear_test, file.path(final_folder, "metrics_linear_test.rds"))
+
+
+#-
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear  <- readRDS(file.path(final_folder, "r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+metrics_linear_test  <- readRDS(file.path(final_folder, "metrics_linear_test.rds"))
+
+
+metrics_linear_test %>% 
+filter(!metric %in% c("prevalence","m_case")) %>% 
+mutate(metric_type = case_when(
+  str_detect(metric, "r2_lin_liab_Florian") ~ "r2_lin_liab_Florian", 
+  str_detect(metric, "r2_lin_liab_ABC") ~ "r2_lin_liab_ABC", 
+  str_detect(metric, "r2_lin") ~ "r2_lin",
+  str_detect(metric, "r2_nag_liab") ~ "r2_nag_liab_ABC",
+  str_detect(metric, "r2_nag") ~ "r2_nag",
+  str_detect(metric, "auc") ~ "auc",
+  TRUE ~ metric
+)) %>%
+mutate(metric = str_extract(metric, "^[^_]+")) %>%
+pivot_wider(names_from = metric, values_from = estimate) %>% 
+mutate(metric_type = fct_relevel(metric_type, c("auc", "r2_lin", "r2_lin_liab_Florian", "r2_lin_liab_ABC", "r2_nag", "r2_nag_liab_ABC"))) %>% 
+# filter(!metric_type %in% c("auc")) %>% 
+ggbarplot(
+  x = "Features",
+  y = "avg", 
+  fill = "Features",
+  facet.by = c("metric_type", "Diagnosis"),
+  scales = "free",
+  color = "black",
+  width = 0.9 # Set width=1 to remove space between bars
+)+
+geom_errorbar(
+  aes(
+    ymin = lower,
+    ymax = upper,
+    group = interaction(Features, Features)
+  ),
+  width = 0.2,
+  position = position_dodge(width = 0.9) # Match width=1 from ggbarplot
+)+
+scale_fill_manual(values = features_colors_palette)+
+my_theme+
+theme(axis.text.x = element_blank())
+
+#-
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear  <- readRDS(file.path(final_folder, "r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+metrics_linear_test  <- readRDS(file.path(final_folder, "metrics_linear_test.rds"))
+
+p_r2_tabs_linear_test  <- plot_barplots_ggpubr(dataframe = metrics_linear_test,
+  x_column = "Features",
+  fill_column = "Features",
+  fill_label = "Features",
+  title = "",
+  x_title = "",
+  metrics = metrics_r2,
+  y_title = "R2",
+  # metrics = metrics_auroc,
+  # y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Diagnosis",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right",
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  fill_colors = features_colors_palette,
+  # padding = -0.001
+  padding = 0,
+  bar_width = 0.9,
+  theme = my_theme
+  # expand = c(0, 0)
+) + 
+# add horizontal dashed line at 0.5
+# theme(aspect.ratio = 1)+
+theme(axis.text.x = element_text(hjust = 0.5, vjust = 0.5)) +
+theme(strip.background = element_blank()) +
+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+stat_pvalue_manual(
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear %>% 
+mutate(y.position = 
+case_when(
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr" ~ 0.06,
+  Diagnosis == "ADHD" & group2 == "PGS+FGRS" ~ 0.09,
+  Diagnosis == "ADHD" & group2 == "GLN+PGS+FGRS" ~ 0.105,
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.115,
+
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr" ~ 0.02,
+  Diagnosis == "ASD" & group2 == "PGS+FGRS" ~ 0.04,
+  Diagnosis == "ASD" & group2 == "GLN+PGS+FGRS" ~ 0.05,
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.06,
+
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr" ~ 0.02,
+  Diagnosis == "BIP" & group2 == "PGS+FGRS" ~ 0.225,
+  Diagnosis == "BIP" & group2 == "GLN+PGS+FGRS" ~ 0.235 ,
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.245,
+
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr" ~ 0.03,
+  Diagnosis == "MDD" & group2 == "PGS+FGRS" ~ 0.095,
+  Diagnosis == "MDD" & group2 == "GLN+PGS+FGRS" ~ 0.105,
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.115,
+
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr" ~ 0.025,
+  Diagnosis == "SCZ" & group2 == "PGS+FGRS" ~ 0.09,
+  Diagnosis == "SCZ" & group2 == "GLN+PGS+FGRS" ~ 0.105,
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.115,
+  TRUE ~ y.position
+)
+),
+label = "p_fdr", 
+tip.length = 0.01, 
+size = pvalue_size);p_r2_tabs_linear_test
+
+
+
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear %>% 
+select(Diagnosis, group1, group2, p_value, y.position)
+
+ggsave(file.path(figs_path, "r2_tabs_linear_test_pvalues.pdf"), print(p_r2_tabs_linear_test), width = 70, height = 25, units = "cm")
+
+
+```
+
+
+## P-values same features DL vs Linear iPSYCH2
+Question: is the performance of the DL integration on the models GLN+bigstatsr, GLN+PGS+FGRS, GLN+bigstatsr+PGS+FGRS higher than the performance of the Linear integration on the same models?
+```{r}
+to_compare <- "DL_vs_Linear"
+
+comparison_params <- set_comparison_parameters(to_compare)
+
+trial_res_tabs_DL_vs_Linear_iPSYCH2 <- metrics_dl_vs_linear_repl %>% 
+filter_out_ADHD() %>% 
+# select(GLN, Interaction) %>% 
+# filter_out_ADHD() %>% 
+# filter(Diagnosis %in% c("ASD")) %>%
+  filter(Split_eval == "iPSYCH2") %>%
+  filter(Integration %in% comparison_params$runs_to_compare_list) %>% 
+  filter(Features %in% c("GLN+bigstatsr", "GLN+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS"))
+
+folder_name <- file.path(final_folder, glue("emp_pvalues_{date}_{to_compare}"))
+filename  <- "auc_pvalues_tabs_DL_vs_Linear_iPSYCH2"
+# remove file
+# if (file.exists(file.path(current_dir, folder_name, filename))) {file.remove(file.path(current_dir, folder_name, filename))}
+
+
+if (!file.exists(file.path(folder_name, filename))) {
+auc_pvalues_tabs_DL_vs_Linear_iPSYCH2 <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = trial_res_tabs_DL_vs_Linear_iPSYCH2,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Integration",
+  folder_name = folder_name
+); auc_pvalues_tabs_DL_vs_Linear_iPSYCH2
+saveRDS(auc_pvalues_tabs_DL_vs_Linear_iPSYCH2, file.path(folder_name, filename))
+} else {
+auc_pvalues_tabs_DL_vs_Linear_iPSYCH2 <- readRDS(file.path(folder_name, filename))
+}
+
+filename  <- "r2_pvalues_tabs_DL_vs_Linear_iPSYCH2"
+if (!file.exists(file.path(folder_name, filename))) {
+r2_pvalues_tabs_DL_vs_Linear_iPSYCH2 <- compute_pvalues_comparisons(
+  to_compare = to_compare,
+  data = trial_res_tabs_DL_vs_Linear_iPSYCH2 ,
+  columns_to_group = comparison_params$columns_to_group,
+  runs_to_compare = comparison_params$runs_to_compare,
+  filter_column = "Integration",
+  metric = "r2",
+  folder_name = folder_name
+); r2_pvalues_tabs_DL_vs_Linear_iPSYCH2
+saveRDS(r2_pvalues_tabs_DL_vs_Linear_iPSYCH2, file.path(folder_name, filename))
+} else {
+r2_pvalues_tabs_DL_vs_Linear_iPSYCH2 <- readRDS(file.path(folder_name, filename))
+}
+
+```
+
+
+## Plot AUC tabs Linear iPSYCH2
+```{r}
+
+#-
+auc_pvalues_formatted_nested_models_iPSYCH2_toplot_linear <- process_statistical_tests(
+  metrics_df = metrics_linear_iPSYCH2 %>% metrics_to_wide(metrics_auroc),
+  emp_pvalues_df = auc_pvalues_nested_models_iPSYCH2_toplot_linear,
+  metric_name = "roc_auc",
+  x_col = "Features", # HERE IT'S IMPORTANT THAT IT'S THE SAAAAAME
+  fill_col = "Features",
+  columns_to_group = c("Diagnosis", "Split_eval"),
+  nested_models = TRUE,
+  step_increase = 0.02,
+  keep_group_model_order = TRUE,
+  print = FALSE,
+  runs_to_compare = NULL,
+  fun_to_apply = "mean_se"
+) %>%
+select(-contains("sig")) %>% 
+rename(p.adj = p_value_fdr_all) %>% 
+add_significance("p.adj") %>% 
+mutate(p_fdr = ifelse(p.adj.signif == "ns", "ns", round(p.adj, 3)))
+
+
+saveRDS(auc_pvalues_formatted_nested_models_iPSYCH2_toplot_linear, file.path(final_folder, "auc_pvalues_formatted_nested_models_iPSYCH2_toplot_linear.rds"))
+saveRDS(metrics_linear_iPSYCH2, file.path(final_folder, "metrics_linear_iPSYCH2.rds"))
+
+p_auc_tabs_linear_iPSYCH2  <- plot_barplots_ggpubr(dataframe = metrics_linear_iPSYCH2,
+  x_column = "Features",
+  fill_column = "Features",
+  fill_label = "Features",
+  title = "",
+  x_title = "",
+  metrics = metrics_auroc,
+  y_title = "AUROC",
+  # metrics = metrics_auroc,
+  # y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Diagnosis",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right",
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  fill_colors = features_colors_palette,
+  # padding = -0.001
+  padding = 0,
+  bar_width = 0.9,
+  theme = my_theme
+  # expand = c(0, 0)
+) + 
+# add horizontal dashed line at 0.5
+geom_hline(yintercept = 0.5, linetype = "dashed", color = "black")+
+# theme(aspect.ratio = 1)+
+theme(axis.text.x = element_text(hjust = 0.5, vjust = 0.5)) +
+# theme(axis.ticks.x = element_line()) +
+theme(strip.background = element_blank()) +
+# rotate 90 degrees
+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+scale_y_continuous(breaks = seq(0.5, 0.77, by = 0.1), limits = c(0, 0.77), expand = c(0, 0))+
+coord_cartesian(ylim = c(0.495, 0.77))+
+scale_y_continuous(breaks = c(seq(0.5, 1, by = 0.05)))+
+stat_pvalue_manual(auc_pvalues_formatted_nested_models_iPSYCH2_toplot_linear %>% 
+mutate(y.position = 
+case_when(
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr" ~ 0.62,
+  Diagnosis == "ADHD" & group2 == "PGS+FGRS" ~ 0.63,
+  Diagnosis == "ADHD" & group2 == "GLN+PGS+FGRS" ~ 0.68,
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.69,
+
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr" ~ 0.58,
+  Diagnosis == "ASD" & group2 == "PGS+FGRS" ~ 0.60,
+  Diagnosis == "ASD" & group2 == "GLN+PGS+FGRS" ~ 0.62,
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.635,
+
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr" ~ 0.55,
+  Diagnosis == "BIP" & group2 == "PGS+FGRS" ~ 0.675,
+  Diagnosis == "BIP" & group2 == "GLN+PGS+FGRS" ~ 0.685,
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.695,
+
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr" ~ 0.56,
+  Diagnosis == "MDD" & group2 == "PGS+FGRS" ~ 0.63,
+  Diagnosis == "MDD" & group2 == "GLN+PGS+FGRS" ~ 0.645,
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.655,
+
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr" ~ 0.565,
+  Diagnosis == "SCZ" & group2 == "PGS+FGRS" ~ 0.645,
+  Diagnosis == "SCZ" & group2 == "GLN+PGS+FGRS" ~ 0.65,
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.66,
+  TRUE ~ y.position
+)
+),
+label = "p_fdr", 
+tip.length = 0.01, 
+size = pvalue_size,
+hide.ns = FALSE);p_auc_tabs_linear_iPSYCH2
+# hide.ns = "p.adj");prova
+
+ggsave(file.path(figs_path, "auc_tabs_linear_iPSYCH2_pvalues.pdf"), p_auc_tabs_linear_iPSYCH2, width = 70, height = 25, units = "cm")
+
+
+
+
+```
+
+
+## Plot R2 tabs Linear iPSYCH2
+```{r}
+
+
+#-
+r2_pvalues_formatted_nested_models_iPSYCH2_toplot_linear <- process_statistical_tests(
+  metrics_df = metrics_linear_iPSYCH2 %>% metrics_to_wide(metrics_r2),
+  emp_pvalues_df = r2_pvalues_nested_models_iPSYCH2_toplot_linear,
+  metric_name = "r2",
+  x_col = "Features", # HERE IT'S IMPORTANT THAT IT'S THE SAAAAAME
+  fill_col = "Features",
+  columns_to_group = c("Diagnosis", "Split_eval"),
+  nested_models = TRUE,
+  step_increase = 0.12,
+  keep_group_model_order = TRUE,
+  print = FALSE,
+  runs_to_compare = NULL,
+  fun_to_apply = "mean_se"
+) %>% 
+select(-contains("sig")) %>% 
+rename(p.adj = p_value_fdr_all) %>% 
+add_significance("p.adj") %>% 
+mutate(p_fdr = ifelse(p.adj.signif == "ns", "ns", round(p.adj, 3)))
+
+saveRDS(metrics_linear_iPSYCH2, file.path(final_folder, "metrics_linear_iPSYCH2.rds"))
+
+saveRDS(r2_pvalues_formatted_nested_models_iPSYCH2_toplot_linear, file.path(final_folder, "r2_pvalues_formatted_nested_models_iPSYCH2_toplot_linear.rds"))
+
+p_r2_tabs_linear_iPSYCH2  <- plot_barplots_ggpubr(dataframe = metrics_linear_iPSYCH2,
+  x_column = "Features",
+  fill_column = "Features",
+  fill_label = "Features",
+  title = "",
+  x_title = "",
+  metrics = metrics_r2,
+  y_title = "R2",
+  # metrics = metrics_auroc,
+  # y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Diagnosis",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right",
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  fill_colors = features_colors_palette,
+  # padding = -0.001
+  padding = 0,
+  bar_width = 0.9,
+  theme = my_theme
+  # expand = c(0, 0)
+) + 
+# add horizontal dashed line at 0.5
+# theme(aspect.ratio = 1)+
+theme(axis.text.x = element_text(hjust = 0.5, vjust = 0.5)) +
+theme(strip.background = element_blank()) +
+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+stat_pvalue_manual(r2_pvalues_formatted_nested_models_iPSYCH2_toplot_linear %>% 
+mutate(y.position = 
+case_when(
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr" ~ 0.04,
+  Diagnosis == "ADHD" & group2 == "PGS+FGRS" ~ 0.085,
+  Diagnosis == "ADHD" & group2 == "GLN+PGS+FGRS" ~ 0.10,
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.105,
+
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr" ~ 0.015,
+  Diagnosis == "ASD" & group2 == "PGS+FGRS" ~ 0.04,
+  Diagnosis == "ASD" & group2 == "GLN+PGS+FGRS" ~ 0.045,
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.05,
+
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr" ~ 0.01,
+  Diagnosis == "BIP" & group2 == "PGS+FGRS" ~ 0.10,
+  Diagnosis == "BIP" & group2 == "GLN+PGS+FGRS" ~ 0.105 ,
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.11,
+
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr" ~ 0.015,
+  Diagnosis == "MDD" & group2 == "PGS+FGRS" ~ 0.06,
+  Diagnosis == "MDD" & group2 == "GLN+PGS+FGRS" ~ 0.065,
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.07,
+
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr" ~ 0.01,
+  Diagnosis == "SCZ" & group2 == "PGS+FGRS" ~ 0.055,
+  Diagnosis == "SCZ" & group2 == "GLN+PGS+FGRS" ~ 0.06,
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.065,
+  TRUE ~ y.position
+)
+),
+label = "p_fdr", 
+tip.length = 0.01, 
+size = pvalue_size,
+hide.ns = FALSE);p_r2_tabs_linear_iPSYCH2
+
+ggsave(file.path(figs_path, "r2_tabs_linear_iPSYCH2_pvalues.pdf"), print(p_r2_tabs_linear_iPSYCH2), width = 70, height = 25, units = "cm")
+
+```
+
+
+## AUC Performance drop tabs DL vs Linear test iPSYCH1
+```{r}
+
+#-
+features_drop_perf_tab  <- c("GLN+bigstatsr", "GLN+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS")
+
+perf_drop_test_auc_tabs <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter(Split_eval == "test_iPSYCH1") %>% select(-any_of(c("Interaction", "Integration"))),
+  features_to_compare = features_drop_perf_tab,
+  metrics_cols = metrics_auroc, 
+  cols_to_remove = c("CV", "Label" , "Model_genotype", "Split_eval", "Split_trained", "Model"),
+  category_col = "Model_type",
+  split1 = "Linear",
+  split2 = "DL"
+) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab))
+
+
+# ----------------------------------
+# Within-model pvalues DL-Linear
+# ----------------------------------
+
+# I had calculated the pvalues for the within-models DL_vs_linear here auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1, so I'll just left_join it
+
+perf_drop_test_auc_tabs  <- perf_drop_test_auc_tabs %>% 
+left_join(auc_pvalues_tabs_DL_vs_Linear_testiPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab)) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+
+saveRDS(perf_drop_test_auc_tabs, file.path(final_folder, "perf_drop_test_auc_tabs.rds"))
+
+#-
+perf_drop_test_auc_tabs <- readRDS(file.path(final_folder, "perf_drop_test_auc_tabs.rds"))
+
+bar_width  <- 0.7
+pvalue_size_fig3 <- 7
+p_perf_drop_tabs_test_DL_linear_auc <- ggbarplot(perf_drop_test_auc_tabs,
+  x = "Features",
+  y = "diff_avg",
+  fill = "Features",
+  position = position_dodge(width = bar_width, preserve = "single"),
+  width = bar_width,
+  add = "",
+  color = "black"
+) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * AUROC ~ .(suffix_delta_model)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Features
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.006,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = +1, # Adjust vertical spacing
+    size = pvalue_size_fig3
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  facet_grid(~Diagnosis, scales = "free_x"); p_perf_drop_tabs_test_DL_linear_auc
+
+
+```
+
+## R2 Performance drop tabs DL vs Linear test iPSYCH1
+```{r}
+
+
+perf_drop_test_r2_tabs <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter(Split_eval == "test_iPSYCH1")  %>% select(-any_of(c("Interaction", "Integration"))),
+  features_to_compare = features_drop_perf_tab,
+  metrics_cols = metrics_r2, 
+  cols_to_remove = c("CV", "Label" , "Model_genotype", "Split_eval", "Split_trained", "Model"),
+  category_col = "Model_type",
+  split1 = "Linear",
+  split2 = "DL"
+) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab))
+
+
+# I had calculated the pvalues for the within-models DL_vs_linear here r2_pvalues_tabs_DL_vs_Linear, so I'll just left_join it
+
+perf_drop_test_r2_tabs  <- perf_drop_test_r2_tabs %>% 
+left_join(r2_pvalues_tabs_DL_vs_Linear, by = c("Diagnosis", "Features")) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab)) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+
+saveRDS(perf_drop_test_r2_tabs, file.path(final_folder, "perf_drop_test_r2_tabs.rds"))
+
+#-
+
+perf_drop_test_r2_tabs <- readRDS(file.path(final_folder, "perf_drop_test_r2_tabs.rds"))
+bar_width  <- 0.7
+p_perf_drop_tabs_test_DL_linear_r2 <- ggbarplot(perf_drop_test_r2_tabs,
+  x = "Features",
+  y = "diff_avg",
+  fill = "Features",
+  position = position_dodge(width = bar_width, preserve = "single"),
+  width = bar_width,
+  add = "",
+  color = "black"
+) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * R^2 * .(suffix_delta_model)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Features
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.006,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5, # Adjust vertical spacing
+    size = pvalue_size
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  facet_grid(~Diagnosis, scales = "free_x");p_perf_drop_tabs_test_DL_linear_r2
+
+
+
+
+```
+
+
+## AUC Performance drop tabs DL vs Linear iPSYCH2
+```{r}
+
+#-
+features_drop_perf_tab  <- c("GLN+bigstatsr", "GLN+PGS+FGRS", "GLN+bigstatsr+PGS+FGRS")
+
+perf_drop_iPSYCH2_auc_tabs <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter(Split_eval == "iPSYCH2") %>% select(-any_of(c("Interaction", "Integration"))),
+  features_to_compare = features_drop_perf_tab,
+  metrics_cols = metrics_auroc, 
+  cols_to_remove = c("CV", "Label" , "Model_genotype", "Split_eval", "Split_trained", "Model"),
+  category_col = "Model_type",
+  split1 = "Linear",
+  split2 = "DL"
+) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab))
+
+
+# ----------------------------------
+# Within-model pvalues DL-Linear
+# ----------------------------------
+
+# I had calculated the pvalues for the within-models DL_vs_linear here r2_pvalues_tabs_DL_vs_Linear_iPSYCH2, so I'll just left_join it
+
+perf_drop_iPSYCH2_auc_tabs  <- perf_drop_iPSYCH2_auc_tabs %>% 
+left_join(auc_pvalues_tabs_DL_vs_Linear_iPSYCH2, by = c("Diagnosis", "Features")) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab)) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+saveRDS(perf_drop_iPSYCH2_auc_tabs, file.path(final_folder, "perf_drop_iPSYCH2_auc_tabs.rds"))
+
+bar_width  <- 0.7
+p_perf_drop_tabs_iPSYCH2_DL_linear_auc <- ggbarplot(perf_drop_iPSYCH2_auc_tabs,
+  x = "Features",
+  y = "diff_avg",
+  fill = "Features",
+  position = position_dodge(width = bar_width, preserve = "single"),
+  width = bar_width,
+  add = "",
+  color = "black"
+) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * AUROC * .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Features
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.003,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5, # Adjust vertical spacing
+    size = pvalue_size
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  facet_grid(~Diagnosis, scales = "free_x");p_perf_drop_tabs_iPSYCH2_DL_linear_auc
+
+ggpar(p_perf_drop_tabs_iPSYCH2_DL_linear_auc, ylim = c(+0.05, -0.05))
+# Add p-values
+
+
+# fig3_auc  <- (p_auc_tabs_linear_iPSYCH2 + theme(legend.position = "bottom")) / (p_perf_drop_tabs_iPSYCH2_DL_linear_auc + theme(legend.position = "bottom") + plot_spacer())
+
+# fig3_auc  <- (p_auc_tabs_linear_iPSYCH2 + theme(legend.position = "bottom") + guides(fill = guide_legend(nrow = 1))) / (p_perf_drop_tabs_iPSYCH2_DL_linear_auc + theme(legend.position = "bottom") + plot_spacer())
+
+p_tabs_test_auc_iPSYCH2  <- (p_auc_tabs_linear_iPSYCH2 + theme(legend.position = "none")) / (p_perf_drop_tabs_iPSYCH2_DL_linear_auc + theme(legend.position = "none") + plot_spacer()) + plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(face = "bold"))
+
+ggsave(glue("plots_paper_final/figs_{date}/perf_drop_tabs_iPSYCH2_DL_linear_auc.pdf"), p_perf_drop_tabs_iPSYCH2_DL_linear_auc, width = 50, height = 30, units = "cm")
+
+width  <- 90
+height <- 60
+ggsave(glue("plots_paper_final/figs_{date}/auc_linear_iPSYCH2_and_auc_drop_tabs_DL_linear_iPSYCH2_{width}x{height}.pdf"), p_tabs_test_auc_iPSYCH2, width = width, height = height, units = "cm")
+
+```
+
+## R2 Performance drop tabs DL vs Linear iPSYCH2
+```{r}
+
+#-
+perf_drop_iPSYCH2_r2_tabs <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter(Split_eval == "iPSYCH2") %>% select(-any_of(c("Interaction", "Integration"))),
+  features_to_compare = features_drop_perf_tab,
+  metrics_cols = metrics_r2, 
+  cols_to_remove = c("CV", "Label" , "Model_genotype", "Split_eval", "Split_trained", "Model"),
+  category_col = "Model_type",
+  split1 = "Linear",
+  split2 = "DL"
+) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab))
+
+
+# I had calculated the pvalues for the within-models DL_vs_linear here r2_pvalues_tabs_DL_vs_Linear, so I'll just left_join it
+
+perf_drop_iPSYCH2_r2_tabs  <- perf_drop_iPSYCH2_r2_tabs %>% 
+left_join(r2_pvalues_tabs_DL_vs_Linear_iPSYCH2, by = c("Diagnosis", "Features")) %>% 
+mutate(Features = factor(Features, levels = features_drop_perf_tab)) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+saveRDS(perf_drop_iPSYCH2_r2_tabs, file.path(final_folder, "perf_drop_iPSYCH2_r2_tabs.rds"))
+
+bar_width  <- 0.7
+p_perf_drop_tabs_iPSYCH2_DL_linear_r2 <- ggbarplot(perf_drop_iPSYCH2_r2_tabs,
+  x = "Features",
+  y = "diff_avg",
+  fill = "Features",
+  position = position_dodge(width = bar_width, preserve = "single"),
+  width = bar_width,
+  add = "",
+  color = "black"
+) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * R^2 * .(suffix_delta_model)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Features
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.003,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5, # Adjust vertical spacing
+    size = pvalue_size_fig3
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  facet_grid(~Diagnosis, scales = "free_x");p_perf_drop_tabs_iPSYCH2_DL_linear_r2
+
+ggpar(p_perf_drop_tabs_iPSYCH2_DL_linear_r2, ylim = c(+0.05, -0.05))
+
+ggsave(file.path(figs_path, "perf_drop_tabs_iPSYCH2_DL_linear_r2.pdf"), p_perf_drop_tabs_iPSYCH2_DL_linear_r2, width = 50, height = 30, units = "cm")
+
+p_tabs_r2_iPSYCH2  <- (p_r2_tabs_linear_iPSYCH2 + theme(legend.position = "none")) / (p_perf_drop_tabs_iPSYCH2_DL_linear_r2 + theme(legend.position = "none") + plot_spacer()) + plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(face = "bold"));p_tabs_r2_iPSYCH2
+
+width  <- 90
+height <- 60
+ggsave(glue("plots_paper_final/figs_{date}/r2_linear_iPSYCH2_and_r2_drop_tabs_DL_linear_iPSYCH2_{width}x{height}.pdf"), p_tabs_r2_iPSYCH2, width = width, height = height, units = "cm")
+
+```
+
+## AUC Linear perf drop iPSYCH2 vs test_iPSYCH1 all features
+Here I want all the features but showing their drop in performance of their linear integration in iPSYCH2 vs test_iPSYCH1
+```{r}
+
+#-
+features  <- c(
+  "GLN",
+  "bigstatsr",
+  "GLN+bigstatsr",
+  "PGS",
+  "FGRS",
+  "PGS+FGRS",
+  "GLN+PGS+FGRS",
+  "bigstatsr+PGS+FGRS",
+  "GLN+bigstatsr+PGS+FGRS"
+)
+metrics_avg %>% count(Features)
+# AUROC
+# Calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the average values
+auc_drop_all_linear_iPSYCH2_vs_test_iPSYCH1 <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter_out_ADHD() %>% filter(Split_eval != "valid") %>% filter(Model_type == "Linear" | (Model_type == "DL" & Model_genotype == "GLN")) %>% filter(CV == "5-CV"),
+  # metrics_df = metrics_dl_vs_linear_avg %>% filter_out_ADHD() %>% filter(Model_type == "Linear") %>% filter(CV == "5-CV"),
+  features_to_compare = features,
+  cols_to_remove = c("CV", "Label", "Model_type", "Split_trained"),
+  category_col = "Split_eval",
+  metrics_cols = metrics_auroc,
+  split1 = "test_iPSYCH1",
+  split2 = "iPSYCH2"
+) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))));auc_drop_all_linear_iPSYCH2_vs_test_iPSYCH1
+
+
+# Format the dataframe to calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the bootstrap replicates
+column_replicates <- "auc_replicates"
+auc_formatted_drop_all_linear_iPSYCH2  <- metrics_dl_vs_linear_repl %>%          
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(CV == "5-CV") %>%
+          filter(Model_type == "Linear" | (Model_type == "DL" & Model_genotype == "GLN")) %>% 
+          # filter(Features %in% runs_to_compare[[1]]) %>%
+          # mutate(Features = fct_relevel(Features, runs_to_compare[[1]])) %>% 
+          mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+          select(Diagnosis, Features, Split_eval, Split_trained, CV, all_of(column_replicates)) %>% 
+          pivot_wider(names_from = Split_eval, values_from = all_of(column_replicates)) %>% 
+          mutate(!!sym(column_replicates) := map2(iPSYCH2, test_iPSYCH1, ~ .x - .y))
+
+
+# auc_pvalues_same_feature_same_model_different_eval %>% filter(Features == "GLN+bigstatsr") 
+
+# ----------------------------------
+# Within-model pvalues
+# ----------------------------------
+# Get the real p-values for the GLN and bigstatsr models
+auc_pvalues_all_linear_iPSYCH2_vs_iPSYCH1 <- auc_pvalues_same_feature_same_model_different_eval %>% 
+filter_out_ADHD() %>% 
+filter(Model_type == "Linear" | (Model_type == "DL" & Features == "GLN"))
+
+# auc_pvalues_all_linear_iPSYCH2_vs_iPSYCH1 %>% filter(Features == "GLN+bigstatsr") # It's there, Linear
+
+
+# Format the dataframe to be compatible with geom_text
+auc_df_all_linear_iPSYCH2_vs_iPSYCH1  <- auc_drop_all_linear_iPSYCH2_vs_test_iPSYCH1 %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+left_join(auc_pvalues_all_linear_iPSYCH2_vs_iPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(Features = fct_relevel(Features, features)) %>%  
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+# create directory
+saveRDS(auc_df_all_linear_iPSYCH2_vs_iPSYCH1, file.path(final_folder, "auc_df_all_linear_iPSYCH2_vs_iPSYCH1.rds"))
+
+#-
+# Barplot
+x_column <- "Diagnosis"
+y_column <- "diff_avg"
+fill_column <- "Features"
+metric_name <- "diff"
+bar_width  <- 0.9
+y_min  <- -0.05
+y_max  <- 0.12
+
+auc_df_all_linear_iPSYCH2_vs_iPSYCH1 %>% count(Features)
+
+p_auc_perf_drop_all_linear_iPSYCH2  <- ggbarplot(auc_df_all_linear_iPSYCH2_vs_iPSYCH1, 
+  x = "Features", 
+  y = y_column, 
+  fill = fill_column, 
+  position = position_dodge(width = bar_width, preserve = "single"), 
+  width = bar_width, 
+  add = "", 
+  facet.by = "Diagnosis",
+  color = "black") +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    # subtitle = "Within-model p-value H1: performance on iPSYCH2 < performance on test_iPSYCH1",
+    y = bquote(Delta * AUROC * .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+geom_errorbar(
+    aes(
+      ymin = !!sym(paste0("lower_", metric_name)),
+      ymax = !!sym(paste0("upper_", metric_name)),
+      group = interaction(!!sym(x_column), !!sym(fill_column))
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  scale_y_reverse(breaks = seq(y_min, y_max, by = 0.02)) +
+  my_theme +
+  theme(aspect.ratio = 1) +
+  scale_fill_manual(values = features_colors_palette) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    strip.background = element_blank(),
+    plot.subtitle = element_text(size = 14)
+    # legend.position = "none"
+  ) +
+  facet_wrap(~Diagnosis, nrow = 1) +
+  geom_text(
+    aes(
+      x = Features, 
+      y = upper_diff+0.01, 
+      label = p.adj,
+      group = Diagnosis
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5,
+    size = pvalue_size_fig3
+  );p_auc_perf_drop_all_linear_iPSYCH2
+
+ggsave(file.path(figs_path, "auc_perf_drop_all_linear_iPSYCH2.pdf"), p_auc_perf_drop_all_linear_iPSYCH2 + theme(legend.position = "none"), width = 80, height = 30, units = "cm")
+
+```
+
+## R2 Linear perf drop iPSYCH2 vs test_iPSYCH1 all features
+Here I want all the features but showing their drop in performance of their linear integration in iPSYCH2 vs test_iPSYCH1
+```{r}
+
+#-
+features  <- c(
+  "GLN",
+  "bigstatsr",
+  "GLN+bigstatsr",
+  "PGS",
+  "FGRS",
+  "PGS+FGRS",
+  "GLN+PGS+FGRS",
+  "bigstatsr+PGS+FGRS",
+  "GLN+bigstatsr+PGS+FGRS"
+)
+metrics_avg %>% count(Features)
+# R2
+# Calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the average values
+r2_df_all_linear_iPSYCH2_vs_test_iPSYCH1 <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter_out_ADHD() %>% filter(Split_eval != "valid")%>% filter(Model_type == "Linear" | (Model_type == "DL" & Model_genotype == "GLN")) %>% filter(CV == "5-CV"),
+  features_to_compare = features,
+  cols_to_remove = c("CV", "Label", "Model_type", "Split_trained"),
+  category_col = "Split_eval",
+  metrics_cols = metrics_r2,
+  split1 = "test_iPSYCH1",
+  split2 = "iPSYCH2"
+) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))); r2_df_all_linear_iPSYCH2_vs_test_iPSYCH1
+
+r2_df_all_linear_iPSYCH2_vs_test_iPSYCH1 %>% count(Model, Features)
+
+
+# Format the dataframe to calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the bootstrap replicates
+column_replicates <- "r2_replicates"
+r2_formatted_drop_all_linear_iPSYCH2  <- metrics_dl_vs_linear_repl %>%          
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(CV == "5-CV") %>%
+          filter(Model_type == "Linear" | (Model_type == "DL" & Model_genotype == "GLN")) %>% 
+          # filter(Features %in% runs_to_compare[[1]]) %>%
+          # mutate(Features = fct_relevel(Features, runs_to_compare[[1]])) %>% 
+          mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+          select(Diagnosis, Features, Split_eval, Split_trained, CV, all_of(column_replicates)) %>% 
+          pivot_wider(names_from = Split_eval, values_from = all_of(column_replicates)) %>% 
+          mutate(!!sym(column_replicates) := map2(iPSYCH2, test_iPSYCH1, ~ .x - .y))
+
+# ----------------------------------
+# Within-model pvalues
+# ----------------------------------
+# Get the real p-values for the GLN and bigstatsr models
+r2_pvalues_all_linear_iPSYCH2_vs_iPSYCH1 <- r2_pvalues_same_feature_same_model_different_eval %>% 
+filter_out_ADHD() %>% 
+filter(Model_type == "Linear" | (Model_type == "DL" & Features == "GLN"))
+
+
+
+#-
+# Format the dataframe to be compatible with geom_text
+r2_df_all_linear_iPSYCH2_vs_iPSYCH1  <- r2_df_all_linear_iPSYCH2_vs_test_iPSYCH1 %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+left_join(r2_pvalues_all_linear_iPSYCH2_vs_iPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(Features = fct_relevel(Features, features)) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+saveRDS(r2_df_all_linear_iPSYCH2_vs_iPSYCH1, file.path(final_folder, "r2_df_all_linear_iPSYCH2_vs_iPSYCH1.rds"))
+
+
+
+#-
+# Barplot
+x_column <- "Diagnosis"
+y_column <- "diff_avg"
+fill_column <- "Features"
+metric_name <- "diff"
+bar_width  <- 0.9
+y_min  <- -0.05
+y_max  <- 0.12
+
+
+p_r2_perf_drop_all_linear_iPSYCH2  <- ggbarplot(r2_df_all_linear_iPSYCH2_vs_iPSYCH1, 
+  x = "Features", 
+  y = y_column, 
+  fill = fill_column, 
+  position = position_dodge(width = bar_width, preserve = "single"), 
+  width = bar_width, 
+  add = "", 
+  facet.by = "Diagnosis",
+  color = "black") +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    # subtitle = "Within-model p-value H1: performance on iPSYCH2 < performance on test_iPSYCH1",
+    y = bquote(Delta * R^2 * .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+geom_errorbar(
+    aes(
+      ymin = !!sym(paste0("lower_", metric_name)),
+      ymax = !!sym(paste0("upper_", metric_name)),
+      group = interaction(!!sym(x_column), !!sym(fill_column))
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  scale_y_reverse(breaks = seq(y_min, y_max, by = 0.02)) +
+  my_theme +
+  theme(aspect.ratio = 1) +
+  scale_fill_manual(values = features_colors_palette) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    strip.background = element_blank(),
+    plot.subtitle = element_text(size = 14)
+    # legend.position = "none"
+  ) +
+  facet_wrap(~Diagnosis, nrow = 1) +
+  geom_text(
+    aes(
+      x = Features, 
+      y = upper_diff+0.01, 
+      label = p.adj,
+      group = Diagnosis
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5,
+    size = pvalue_size_fig3
+  );p_r2_perf_drop_all_linear_iPSYCH2
+
+ggsave(file.path(figs_path, "r2_perf_drop_all_linear_iPSYCH2.pdf"), p_r2_perf_drop_all_linear_iPSYCH2 + theme(legend.position = "none"), width = 80, height = 30, units = "cm")
+
+```
+
+
+## AUC DL perf drop iPSYCH2 vs test_iPSYCH1 all features
+Here I want all the features but showing their drop in performance of their linear integration in iPSYCH2 vs test_iPSYCH1
+```{r}
+
+
+features  <- c(
+  "GLN",
+  "bigstatsr",
+  "GLN+bigstatsr",
+  "PGS",
+  "FGRS",
+  "PGS+FGRS",
+  "GLN+PGS+FGRS",
+  "bigstatsr+PGS+FGRS",
+  "GLN+bigstatsr+PGS+FGRS"
+)
+metrics_avg %>% count(Features)
+# AUROC
+# Calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the average values
+auc_drop_all_DL_iPSYCH2 <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter_out_ADHD() %>% filter(Model_type == "DL" | (Model_type == "Linear" & Model_genotype == "bigstatsr")) %>% filter(CV == "5-CV"),
+  features_to_compare = features,
+  cols_to_remove = c("CV", "Label", "Model_type", "Split_trained"),
+  category_col = "Split_eval",
+  metrics_cols = metrics_auroc,
+  split1 = "test_iPSYCH1",
+  split2 = "iPSYCH2"
+) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+
+auc_drop_all_DL_iPSYCH2 %>% count(Features, Model)
+
+# metrics_dl_vs_linear_avg %>% filter_out_ADHD() %>% 
+# # filter(Model_type == "DL" | (Model_type == "Linear" & Model_genotype == "bigstatsr" & Model != "EIR"))  %>% 
+# filter(Model_type == "DL" | (Model_type == "Linear" & Model_genotype == "bigstatsr"))  %>% 
+# filter(CV == "5-CV") %>% 
+# filter(Features %in% c("GLN","GLN_on_geno","bigstatsr","bigstatsr_on_geno")) %>% 
+# count(Model, Model_type, Features)
+
+# Format the dataframe to calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the bootstrap replicates
+column_replicates <- "auc_replicates"
+auc_formatted_drop_all_DL_iPSYCH2  <- metrics_dl_vs_linear_repl %>%          
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(CV == "5-CV") %>%
+          filter(Model_type == "DL") %>% 
+          # filter(Features %in% runs_to_compare[[1]]) %>%
+          # mutate(Features = fct_relevel(Features, runs_to_compare[[1]])) %>% 
+          mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+          select(Diagnosis, Features, Split_eval, Split_trained, CV, all_of(column_replicates)) %>% 
+          pivot_wider(names_from = Split_eval, values_from = all_of(column_replicates)) %>% 
+          mutate(!!sym(column_replicates) := map2(iPSYCH2, test_iPSYCH1, ~ .x - .y))
+
+# ----------------------------------
+# Within-model pvalues
+# ----------------------------------
+# Get the real p-values for the GLN and bigstatsr models
+auc_pvalues_all_DL_iPSYCH2_vs_iPSYCH1 <- auc_pvalues_same_feature_same_model_different_eval %>% 
+filter_out_ADHD() %>% 
+filter(Model_type == "DL" | (Model_type == "Linear" & Features == "bigstatsr"))
+
+#-
+# Format the dataframe to be compatible with geom_text
+auc_df_all_DL_iPSYCH2_vs_iPSYCH1  <- auc_drop_all_DL_iPSYCH2 %>% 
+# auc_drop_all_DL_iPSYCH2 %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+left_join(auc_pvalues_all_DL_iPSYCH2_vs_iPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(Features = fct_relevel(Features, features)) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+# create directory
+saveRDS(auc_df_all_DL_iPSYCH2_vs_iPSYCH1, file.path(final_folder, "auc_df_all_DL_iPSYCH2_vs_iPSYCH1.rds"))
+
+#-
+# Barplot
+x_column <- "Diagnosis"
+y_column <- "diff_avg"
+fill_column <- "Features"
+metric_name <- "diff"
+bar_width  <- 0.9
+y_min  <- -0.05
+y_max  <- 0.12
+
+
+p_auc_perf_drop_all_DL_iPSYCH2  <- ggbarplot(auc_df_all_DL_iPSYCH2_vs_iPSYCH1, 
+  x = "Features", 
+  y = y_column, 
+  fill = fill_column, 
+  position = position_dodge(width = bar_width, preserve = "single"), 
+  width = bar_width, 
+  add = "", 
+  facet.by = "Diagnosis",
+  color = "black") +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    # subtitle = "Within-model p-value H1: performance on iPSYCH2 < performance on test_iPSYCH1",
+    y = bquote(Delta * AUROC * .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+geom_errorbar(
+    aes(
+      ymin = !!sym(paste0("lower_", metric_name)),
+      ymax = !!sym(paste0("upper_", metric_name)),
+      group = interaction(!!sym(x_column), !!sym(fill_column))
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  scale_y_reverse(breaks = seq(y_min, y_max, by = 0.02)) +
+  my_theme +
+  theme(aspect.ratio = 1) +
+  scale_fill_manual(values = features_colors_palette) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    strip.background = element_blank(),
+    plot.subtitle = element_text(size = 14)
+    # legend.position = "none"
+  ) +
+  facet_wrap(~Diagnosis, nrow = 1) +
+  geom_text(
+    aes(
+      x = Features, 
+      y = upper_diff+0.01, 
+      label = p.adj,
+      group = Diagnosis
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5,
+    size = pvalue_size_fig3
+  );p_auc_perf_drop_all_DL_iPSYCH2
+
+ggsave(file.path(figs_path, "auc_perf_drop_all_DL_iPSYCH2.pdf"), p_auc_perf_drop_all_DL_iPSYCH2 + theme(legend.position = "none"), width = 80, height = 30, units = "cm")
+
+```
+
+## R2 DL perf drop iPSYCH2 vs test_iPSYCH1 all features
+Here I want all the features but showing their drop in performance of their linear integration in iPSYCH2 vs test_iPSYCH1
+```{r}
+
+
+features  <- c(
+  "GLN",
+  "bigstatsr",
+  "GLN+bigstatsr",
+  "PGS",
+  "FGRS",
+  "PGS+FGRS",
+  "GLN+PGS+FGRS",
+  "bigstatsr+PGS+FGRS",
+  "GLN+bigstatsr+PGS+FGRS"
+)
+metrics_avg %>% count(Features)
+# R2
+# Calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the average values
+r2_drop_all_DL_iPSYCH2 <- calculate_performance_diff(
+  metrics_df = metrics_dl_vs_linear_avg %>% filter_out_ADHD() %>% filter(Model_type == "DL" | (Model_type == "Linear" & Model_genotype == "bigstatsr")) %>% filter(CV == "5-CV" & Split_eval != "valid"),
+  features_to_compare = features,
+  cols_to_remove = c("CV", "Label", "Model_type", "Split_trained"),
+  category_col = "Split_eval",
+  metrics_cols = metrics_r2,
+  split1 = "test_iPSYCH1",
+  split2 = "iPSYCH2"
+) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis))))
+
+
+# Format the dataframe to calculate the difference in performance between test_iPSYCH1 and iPSYCH2 for each model using the bootstrap replicates
+column_replicates <- "r2_replicates"
+r2_formatted_drop_all_DL_iPSYCH2  <- metrics_dl_vs_linear_repl %>%          
+          filter_out_ADHD() %>%
+          filter(Split_trained == "train_valid") %>%
+          filter(CV == "5-CV") %>%
+          filter(Model_type == "DL") %>% 
+          # filter(Features %in% runs_to_compare[[1]]) %>%
+          # mutate(Features = fct_relevel(Features, runs_to_compare[[1]])) %>% 
+          mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+          select(Diagnosis, Features, Split_eval, Split_trained, CV, all_of(column_replicates)) %>% 
+          pivot_wider(names_from = Split_eval, values_from = all_of(column_replicates)) %>% 
+          mutate(!!sym(column_replicates) := map2(iPSYCH2, test_iPSYCH1, ~ .x - .y))
+
+# ----------------------------------
+# Within-model pvalues
+# ----------------------------------
+# Get the real p-values for the GLN and bigstatsr models
+r2_pvalues_all_DL_iPSYCH2_vs_iPSYCH1 <- r2_pvalues_same_feature_same_model_different_eval %>% 
+filter_out_ADHD() %>% 
+filter(Model_type == "DL" | (Model_type == "Linear" & Features == "bigstatsr"))
+
+
+
+
+#-
+# Format the dataframe to be compatible with geom_text
+r2_df_all_DL_iPSYCH2_vs_iPSYCH1  <- r2_drop_all_DL_iPSYCH2 %>% 
+mutate(Features = str_replace_all(Features, "_on_geno", "")) %>% 
+left_join(r2_pvalues_all_DL_iPSYCH2_vs_iPSYCH1, by = c("Diagnosis", "Features")) %>% 
+mutate(Diagnosis = factor(Diagnosis, levels = sort(unique(Diagnosis)))) %>% 
+mutate(Features = fct_relevel(Features, features)) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = FALSE), "ns"))
+
+saveRDS(r2_df_all_DL_iPSYCH2_vs_iPSYCH1, file.path(final_folder, "r2_df_all_DL_iPSYCH2_vs_iPSYCH1.rds"))
+
+#-
+# Barplot
+x_column <- "Diagnosis"
+y_column <- "diff_avg"
+fill_column <- "Features"
+metric_name <- "diff"
+bar_width  <- 0.9
+y_min  <- -0.05
+y_max  <- 0.12
+
+
+p_r2_perf_drop_all_DL_iPSYCH2  <- ggbarplot(r2_df_all_DL_iPSYCH2_vs_iPSYCH1, 
+  x = "Features", 
+  y = y_column, 
+  fill = fill_column, 
+  position = position_dodge(width = bar_width, preserve = "single"), 
+  width = bar_width, 
+  add = "", 
+  facet.by = "Diagnosis",
+  color = "black") +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    # subtitle = "Within-model p-value H1: performance on iPSYCH2 < performance on test_iPSYCH1",
+    y = bquote(Delta * R^2 * .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+geom_errorbar(
+    aes(
+      ymin = !!sym(paste0("lower_", metric_name)),
+      ymax = !!sym(paste0("upper_", metric_name)),
+      group = interaction(!!sym(x_column), !!sym(fill_column))
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  scale_y_reverse(breaks = seq(y_min, y_max, by = 0.02)) +
+  my_theme +
+  theme(aspect.ratio = 1) +
+  scale_fill_manual(values = features_colors_palette) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    strip.background = element_blank(),
+    plot.subtitle = element_text(size = 14)
+    # legend.position = "none"
+  ) +
+  facet_wrap(~Diagnosis, nrow = 1) +
+  geom_text(
+    aes(
+      x = Features, 
+      y = upper_diff+0.01, 
+      label = p.adj,
+      group = Diagnosis
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = -0.5,
+    size = pvalue_size_fig3
+  );p_r2_perf_drop_all_DL_iPSYCH2
+
+ggsave(file.path(figs_path, "r2_perf_drop_all_DL_iPSYCH2.pdf"), p_r2_perf_drop_all_DL_iPSYCH2 + theme(legend.position = "none"), width = 80, height = 30, units = "cm")
+
+```
+
+## AUROC integrations Linear vs DL drop perf iPSYCH2 vs test_iPSYCH1
+```{r}
+
+auc_df_all_linear_iPSYCH2_vs_iPSYCH1 <- readRDS(file.path(final_folder, "auc_df_all_linear_iPSYCH2_vs_iPSYCH1.rds"))
+auc_df_all_DL_iPSYCH2_vs_iPSYCH1 <- readRDS(file.path(final_folder, "auc_df_all_DL_iPSYCH2_vs_iPSYCH1.rds"))
+#-
+auc_df_all_DL_linear_iPSYCH2_vs_iPSYCH1 <- bind_rows(auc_df_all_linear_iPSYCH2_vs_iPSYCH1, auc_df_all_DL_iPSYCH2_vs_iPSYCH1) %>% 
+filter(str_detect(Features, "GLN") & str_detect(Features, "\\+")) %>% 
+mutate(Integration = fct_relevel(Integration, c("Linear", "DL"))) %>% 
+select(-c(contains("p_value_bonf"), contains("p_value_fdr"))) %>% 
+mutate(p_value_fdr_all = p.adjust(p_value, method = "fdr")) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = TRUE), "ns"))
+
+
+
+#-
+bar_width  <- 0.7
+pvalue_size_fig3 <- 7
+
+
+auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear  <- readRDS(file.path(final_folder, "auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+metrics_linear_test  <- readRDS(file.path(final_folder, "metrics_linear_test.rds"))
+
+
+p_auc_tabs_linear_test  <- plot_barplots_ggpubr(dataframe = metrics_linear_test,
+  x_column = "Features",
+  fill_column = "Features",
+  fill_label = "Features",
+  title = "",
+  x_title = "",
+  metrics = metrics_auroc,
+  y_title = "AUROC",
+  # metrics = metrics_auroc,
+  # y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Diagnosis",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right", # Remove legend by setting position to "none"
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  # pvalue_size = 9,
+  fill_colors = features_colors_palette,
+  # padding = -0.001
+  padding = 0,
+  bar_width = 0.9,
+  theme = my_theme
+  # expand = c(0, 0)
+) + 
+# add horizontal dashed line at 0.5
+geom_hline(yintercept = 0.5, linetype = "dashed", color = "black")+
+# theme(aspect.ratio = 1)+
+theme(axis.text.x = element_text(hjust = 0.5, vjust = 0.5)) +
+# theme(axis.ticks.x = element_line()) +
+theme(strip.background = element_blank()) +
+# rotate 90 degrees
+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+scale_y_continuous(breaks = seq(0.5, 0.77, by = 0.1), limits = c(0, 0.77), expand = c(0, 0))+
+coord_cartesian(ylim = c(0.495, 0.74))+
+scale_y_continuous(breaks = c(seq(0.5, 1, by = 0.05)))+
+stat_pvalue_manual(
+auc_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear %>% 
+mutate(y.position = 
+case_when(
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr" ~ 0.65,
+  Diagnosis == "ADHD" & group2 == "PGS+FGRS" ~ 0.66,
+  Diagnosis == "ADHD" & group2 == "GLN+PGS+FGRS" ~ 0.705,
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.72,
+
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr" ~ 0.59,
+  Diagnosis == "ASD" & group2 == "PGS+FGRS" ~ 0.61,
+  Diagnosis == "ASD" & group2 == "GLN+PGS+FGRS" ~ 0.63,
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.645,
+
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr" ~ 0.60,
+  Diagnosis == "BIP" & group2 == "PGS+FGRS" ~ 0.71,
+  Diagnosis == "BIP" & group2 == "GLN+PGS+FGRS" ~ 0.72,
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.73,
+
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr" ~ 0.61,
+  Diagnosis == "MDD" & group2 == "PGS+FGRS" ~ 0.66,
+  Diagnosis == "MDD" & group2 == "GLN+PGS+FGRS" ~ 0.67,
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.68,
+
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr" ~ 0.62,
+  Diagnosis == "SCZ" & group2 == "PGS+FGRS" ~ 0.675,
+  Diagnosis == "SCZ" & group2 == "GLN+PGS+FGRS" ~ 0.68,
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.69,
+  TRUE ~ y.position
+)
+),
+label = "p_fdr", 
+tip.length = 0.01, 
+size = pvalue_size_fig3)+
+# remove legend
+theme(legend.position = "none")
+
+
+
+perf_drop_test_auc_tabs <- readRDS(file.path(final_folder, "perf_drop_test_auc_tabs.rds"))
+
+bar_width  <- 0.7
+pvalue_size_fig3 <- 7
+p_perf_drop_tabs_test_DL_linear_auc <- ggbarplot(perf_drop_test_auc_tabs,
+  x = "Features",
+  y = "diff_avg",
+  fill = "Features",
+  position = position_dodge(width = bar_width, preserve = "single"),
+  width = bar_width,
+  add = "",
+  color = "black"
+) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * AUROC ~ .(suffix_delta_model)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Features
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.006,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = +0.7, # Adjust vertical spacing
+    size = pvalue_size_fig3
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  facet_grid(~Diagnosis, scales = "free_x")
+
+
+p_auc_perf_drop_tabs_iPSYCH2_linear_vs_DL_fig3C  <- ggplot(auc_df_all_DL_linear_iPSYCH2_vs_iPSYCH1,
+  aes(
+    x = Features,
+    y = diff_avg,
+    fill = Features,
+    pattern = Integration  # Add pattern aesthetic
+  )
+) +
+# geom_bar(
+#     position = position_dodge(width = bar_width, preserve = "single"),
+#     width = bar_width,
+#     color = "black",
+#     stat = "identity"
+#   ) +
+geom_bar_pattern(
+    position = position_dodge(width = bar_width, preserve = "single"),
+    width = bar_width,
+    color = "black",
+    pattern_fill = "black",
+    pattern_angle = 45,
+    pattern_density = 0.1,
+    pattern_spacing = 0.025,
+    stat = "identity",
+    pattern_key_scale_factor = 0.5
+  ) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * AUROC ~ .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Integration
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.006,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = +0.7, # Adjust vertical spacing
+    size = pvalue_size_fig3
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  guides(fill = "none", pattern = guide_legend(title = "Integration", override.aes = list(fill = features_colors_palette["GLN+PGS+FGRS"]))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  # Using different patterns that are better supported in ggpattern
+  scale_pattern_manual(values = c("Linear" = "stripe", "DL" = "crosshatch")) +
+  facet_grid(~Diagnosis, scales = "free_x")+
+  theme(legend.position = "bottom")
+
+
+
+
+row2 <- ((p_perf_drop_tabs_test_DL_linear_auc + theme(legend.position = "none")) | p_auc_perf_drop_tabs_iPSYCH2_linear_vs_DL_fig3C) + plot_layout(widths = c(1, 2))
+
+
+
+fig3_auc <- 
+  (p_auc_tabs_linear_test + theme(legend.position = "none")) / 
+  row2 +
+  plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(face = "bold"))
+
+# ggsave(glue("plots_paper_final/figs_{date}/perf_drop_tabs_test_DL_linear_auc.pdf"), p_perf_drop_tabs_test_DL_linear_auc, width = 50, height = 30, units = "cm")
+
+width  <- 90
+height <- 60
+ggsave(file.path("/Users/lmz306", "fig3_auc.pdf"), fig3_auc, width = width, height = height, units = "cm")
+
+# cairo_pdf(glue("plots_paper_final/figs_{date}/fig3_auc_{width}x{height}.pdf"), width = width / 2.54, height = height / 2.54)
+# print(fig3_auc)
+# dev.off()
+
+
+
+
+```
+
+## R2 integrations Linear vs DL drop perf iPSYCH2 vs test_iPSYCH1
+
+```{r}
+
+#-
+
+r2_df_all_linear_iPSYCH2_vs_iPSYCH1  <- readRDS(file.path(final_folder, "r2_df_all_linear_iPSYCH2_vs_iPSYCH1.rds"))
+
+r2_df_all_DL_iPSYCH2_vs_iPSYCH1  <- readRDS(file.path(final_folder, "r2_df_all_DL_iPSYCH2_vs_iPSYCH1.rds"))
+
+r2_df_all_DL_linear_iPSYCH2_vs_iPSYCH1 <- bind_rows(r2_df_all_linear_iPSYCH2_vs_iPSYCH1, r2_df_all_DL_iPSYCH2_vs_iPSYCH1) %>% 
+filter(str_detect(Features, "GLN") & str_detect(Features, "\\+")) %>% 
+mutate(Integration = fct_relevel(Integration, c("Linear", "DL"))) %>% 
+select(-c(contains("p_value_bonf"), contains("p_value_fdr"))) %>% 
+mutate(p_value_fdr_all = p.adjust(p_value, method = "fdr")) %>% 
+mutate(p.adj = ifelse(p_value_fdr_all < 0.05, format(p_value_fdr_all, digits = 2, scientific = TRUE), "ns"))
+
+bar_width  <- 0.7
+
+
+
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear  <- readRDS(file.path(final_folder, "r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear.rds"))
+metrics_linear_test  <- readRDS(file.path(final_folder, "metrics_linear_test.rds"))
+
+p_r2_tabs_linear_test  <- plot_barplots_ggpubr(dataframe = metrics_linear_test,
+  x_column = "Features",
+  fill_column = "Features",
+  fill_label = "Features",
+  title = "",
+  x_title = "",
+  metrics = metrics_r2,
+  y_title = "R2",
+  # metrics = metrics_auroc,
+  # y_title = "AUROC",
+  facet = TRUE,
+  facet_type = "grid",
+  facet_var = "Diagnosis",
+  x_angle = 0,
+  x_hjust = 1,
+  legend_position = "right",
+  text_size = 11,
+  title_hjust = 0.5,
+  add_text = FALSE,
+  fill_colors = features_colors_palette,
+  # padding = -0.001
+  padding = 0,
+  bar_width = 0.9,
+  theme = my_theme
+  # expand = c(0, 0)
+) + 
+# add horizontal dashed line at 0.5
+# theme(aspect.ratio = 1)+
+theme(axis.text.x = element_text(hjust = 0.5, vjust = 0.5)) +
+theme(strip.background = element_blank()) +
+theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+stat_pvalue_manual(
+r2_pvalues_formatted_nested_models_test_iPSYCH1_toplot_linear %>% 
+mutate(y.position = 
+case_when(
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr" ~ 0.06,
+  Diagnosis == "ADHD" & group2 == "PGS+FGRS" ~ 0.09,
+  Diagnosis == "ADHD" & group2 == "GLN+PGS+FGRS" ~ 0.105,
+  Diagnosis == "ADHD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.115,
+
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr" ~ 0.02,
+  Diagnosis == "ASD" & group2 == "PGS+FGRS" ~ 0.04,
+  Diagnosis == "ASD" & group2 == "GLN+PGS+FGRS" ~ 0.05,
+  Diagnosis == "ASD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.06,
+
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr" ~ 0.02,
+  Diagnosis == "BIP" & group2 == "PGS+FGRS" ~ 0.225,
+  Diagnosis == "BIP" & group2 == "GLN+PGS+FGRS" ~ 0.235 ,
+  Diagnosis == "BIP" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.245,
+
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr" ~ 0.03,
+  Diagnosis == "MDD" & group2 == "PGS+FGRS" ~ 0.095,
+  Diagnosis == "MDD" & group2 == "GLN+PGS+FGRS" ~ 0.105,
+  Diagnosis == "MDD" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.115,
+
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr" ~ 0.025,
+  Diagnosis == "SCZ" & group2 == "PGS+FGRS" ~ 0.09,
+  Diagnosis == "SCZ" & group2 == "GLN+PGS+FGRS" ~ 0.105,
+  Diagnosis == "SCZ" & group2 == "GLN+bigstatsr+PGS+FGRS" ~ 0.115,
+  TRUE ~ y.position
+)
+),
+label = "p_fdr", 
+tip.length = 0.01, 
+size = pvalue_size_fig3)
+
+perf_drop_test_r2_tabs <- readRDS(file.path(final_folder, "perf_drop_test_r2_tabs.rds"))
+bar_width  <- 0.7
+p_perf_drop_tabs_test_DL_linear_r2 <- ggbarplot(perf_drop_test_r2_tabs,
+  x = "Features",
+  y = "diff_avg",
+  fill = "Features",
+  position = position_dodge(width = bar_width, preserve = "single"),
+  width = bar_width,
+  add = "",
+  color = "black"
+) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * R^2 * .(suffix_delta_model)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Features
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.006,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = +0.7, # Adjust vertical spacing
+    size = pvalue_size_fig3 
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  facet_grid(~Diagnosis, scales = "free_x")
+
+p_r2_perf_drop_tabs_iPSYCH2_linear_vs_DL_fig3C  <- ggplot(r2_df_all_DL_linear_iPSYCH2_vs_iPSYCH1,
+  aes(
+    x = Features,
+    y = diff_avg,
+    fill = Features,
+    pattern = Integration  # Add pattern aesthetic
+  )
+) +
+geom_bar_pattern(
+    position = position_dodge(width = bar_width, preserve = "single"),
+    width = bar_width,
+    color = "black",
+    pattern_fill = "black",
+    pattern_angle = 45,
+    pattern_density = 0.1,
+    pattern_spacing = 0.025,
+    stat = "identity",
+    pattern_key_scale_factor=0.5
+  ) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "",
+    y = bquote(Delta * R^2 * .(suffix_delta_eval)),
+    x = "",
+    fill = "Features"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower_diff,
+      ymax = upper_diff,
+      group = Integration
+    ),
+    width = 0.2,
+    position = position_dodge(width = bar_width)
+  ) +
+  geom_text(
+    aes(
+      x = Features,
+      y = upper_diff+0.006,
+      label = p.adj
+    ),
+    position = position_dodge(width = bar_width),
+    vjust = +0.7, # Adjust vertical spacing
+    size = pvalue_size_fig3
+  ) +
+  scale_y_reverse() +
+  my_theme +
+  guides(fill = "none", pattern = guide_legend(title = "Integration", override.aes = list(fill = features_colors_palette["GLN+PGS+FGRS"]))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme(strip.background = element_blank()) +
+  scale_fill_manual(values = features_colors_palette) +
+  scale_pattern_manual(values = c("Linear" = "stripe", "DL" = "crosshatch")) +
+  facet_grid(~Diagnosis, scales = "free_x")+
+    theme(legend.position = "bottom")
+
+
+row2  <- ((p_perf_drop_tabs_test_DL_linear_r2 + theme(legend.position = "none")) | p_r2_perf_drop_tabs_iPSYCH2_linear_vs_DL_fig3C) + plot_layout(widths = c(1, 2))
+
+p_tabs_test_r2  <- (p_r2_tabs_linear_test + theme(legend.position = "none")) / row2 + plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(face = "bold"))
+
+# ggsave(glue("plots_paper_final/figs_{date}/perf_drop_tabs_test_DL_linear_r2.pdf"), p_perf_drop_tabs_test_DL_linear_r2, width = 50, height = 30, units = "cm")
+
+width  <- 90
+height <- 60
+ggsave(file.path("/Users/lmz306", "FigS5_r2.pdf"), p_tabs_test_r2, width = width, height = height, units = "cm")
+
+
+
+```

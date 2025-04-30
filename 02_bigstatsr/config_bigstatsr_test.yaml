@@ -1,0 +1,33 @@
+# Snakemake global configs ---------------------------------------------------------------------
+
+project: "igpv"
+cohort: "iPSYCH2012"
+# cohort: "iPSYCH2015i"
+
+control: "nodiagkontrol2015I"
+metadata_path: "/faststorage/jail/project/igpv/backup/metadata/"
+
+# Add combinations of gen and cov
+input_types:
+    - "onlygen"
+    - "gencov"
+    # - "onlycov"
+
+snps: "/home/leocob/igpv/backup/iPSYCH2012_EurUnrel/genome_wide_PRS/psych_P_thresh_0.05_iPSYCH2012_EurUnrel_clumped_r2_0.5.rsids"
+
+variable: "cat"
+k: 5
+
+alphas:
+    - 0.0001
+    - 0.001
+    - 0.01
+    - 0.1
+    - 1
+
+diagnoses_to_run:
+    - adhd
+    - autism
+    - bipol
+    - majordd
+    - skizo
