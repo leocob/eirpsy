@@ -47,4 +47,4 @@ snakemake --config gpu_or_cpu=$gpu_or_cpu --snakefile eir_pipeline_DL_integratio
 
 ## Plotting
 
-Follow code in 04_plotting/plotting.qmd
+Follow code in 05_plotting/plotting.qmd
